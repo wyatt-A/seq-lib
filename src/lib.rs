@@ -1,4 +1,5 @@
 mod rf_pulses;
+pub use seq_struct;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{Angle, FieldGrad, Freq, Length, Time};
 use mr_units::quantity::Unit;
