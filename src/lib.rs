@@ -7,6 +7,7 @@ use seq_struct::acq_event::ACQEvent;
 use seq_struct::grad_strength::EventControl;
 use seq_struct::gradient_event::GradEvent;
 use seq_struct::rf_event::RfEvent;
+use seq_struct::rf_pulse::RfPulse;
 use seq_struct::seq_loop::SeqLoop;
 use seq_struct::waveform::Waveform;
 use crate::rf_pulses::hardpulse;
@@ -28,6 +29,7 @@ mod tests {
             fov_mm: 20.,
             n_samples: 256,
             te_ms: 10.,
+            rep_time_ms: 500.0,
         };
 
         let seq = s.compile();
@@ -53,6 +55,7 @@ pub struct SliceProfileSE {
     fov_mm: f64,
     n_samples: usize,
     te_ms: f64,
+    rep_time_ms: f64,
 }
 
 impl Default for SliceProfileSE {
@@ -67,6 +70,7 @@ impl Default for SliceProfileSE {
             fov_mm: 20.,
             n_samples: 256,
             te_ms: 10.,
+            rep_time_ms: 500.
         }
     }
 }
@@ -141,8 +145,8 @@ impl PulseSequence for SliceProfileSE {
         let e_exc = RfEvent::new("exc",&p_exc,&c_exc_pow);
         let e_ref = RfEvent::new("ref",&p_ref,&c_ref_pow).with_phase(&c_180_phase);
 
-        let e_ss = GradEvent::new("ss").with_z(&w_ss).with_strength_z(&c_ss_grad);
-        let e_sr = GradEvent::new("ss_ref").with_z(&w_ss_ref).with_strength_z(&c_ss_ref_grad).with_x(&w_ss_ref).with_strength_x(&c_prephase);
+        let e_ss = GradEvent::new("ss").with_x(&w_ss).with_strength_x(&c_ss_grad);
+        let e_sr = GradEvent::new("ss_ref").with_x(&w_ss_ref).with_strength_x(&c_prephase);
         let e_crush_left = GradEvent::new("crush_l").with_x(&w_crush).with_strength_x(&c_crush);
         let e_crush_right = GradEvent::new("crush_r").with_x(&w_crush).with_strength_x(&c_crush);
         let e_ro = GradEvent::new("ro").with_x(&w_ro).with_strength_x(&c_ro);
@@ -171,6 +175,153 @@ impl PulseSequence for SliceProfileSE {
         vl.set_time_span("ref","ro",50,50,tau).unwrap();
         vl.set_time_span("ref","acq",50,50,tau).unwrap();
 
+        vl.set_rep_time(Time::ms(self.rep_time_ms)).unwrap();
+
         vl
+    }
+}
+
+
+
+pub struct RfCal {
+
+    n_reps: usize,
+    n_samples: usize,
+    bandwidth_hz: f64,
+    tau_1_ms: f64,
+    tau_2_ms: f64,
+    rf_dur_us: usize,
+    grad_stab_time_ms: f64,
+    rep_time_ms: f64,
+}
+
+
+impl Default for RfCal {
+    fn default() -> Self {
+        RfCal {
+            n_reps: 10,
+            n_samples: 256,
+            bandwidth_hz: 50_000.,
+            tau_1_ms: 5.0,
+            tau_2_ms: 2.5,
+            rf_dur_us: 200,
+            grad_stab_time_ms: 2.,
+            rep_time_ms: 500.,
+        }
+    }
+}
+
+impl PulseSequence for RfCal {
+    fn compile(&self) -> SeqLoop {
+
+        let bw = Freq::hz(self.bandwidth_hz);
+        let grad_stab_time = Time::ms(self.grad_stab_time_ms);
+        let tau = Time::ms(self.tau_1_ms);
+        let t_fill = Time::ms(self.tau_2_ms);
+        let rep_time = Time::ms(self.rep_time_ms);
+
+        let rf_dur = Time::us(self.rf_dur_us);
+        let rf_dt = Time::us(2);
+        let grad_dt = Time::us(2);
+
+        // event controllers
+        let c_gx = EventControl::<FieldGrad>::new()
+            .with_adj("slice_x")
+            .to_shared();
+
+        let c_gy = EventControl::<FieldGrad>::new()
+            .with_adj("slice_y")
+            .to_shared();
+
+        let c_gz = EventControl::<FieldGrad>::new()
+            .with_adj("slice_z")
+            .to_shared();
+
+        let c_rf = EventControl::<f64>::new()
+            .with_adj("rf_pow")
+            .to_shared();
+
+        let c_rf_phase = EventControl::<Angle>::new()
+            .with_adj("rf_phase")
+            .to_shared();
+
+        // RF pulses
+        let n_alpha_samples = (rf_dur / rf_dt).si() as usize;
+        let alpha_pulse = RfPulse::new(
+            &Waveform::new().add_list_r(
+                &vec![1.;n_alpha_samples],
+                rf_dt
+            ).to_shared(),
+            3.,
+            Nuc1H
+        ).to_shared();
+
+
+        // Grad waveforms
+        let ramp_up = Waveform::new()
+            .ramp(0,1,100,grad_dt).to_shared();
+        let ramp_down = Waveform::new()
+            .ramp(1,0,100,grad_dt).to_shared();
+
+        // Grad events
+        let ru = GradEvent::new("ru")
+            .with_x(&ramp_up)
+            .with_y(&ramp_up)
+            .with_z(&ramp_up)
+            .with_strength_x(&c_gx)
+            .with_strength_y(&c_gy)
+            .with_strength_z(&c_gz);
+
+        let rd = GradEvent::new("rd")
+            .with_x(&ramp_down)
+            .with_y(&ramp_down)
+            .with_z(&ramp_down)
+            .with_strength_x(&c_gx)
+            .with_strength_y(&c_gy)
+            .with_strength_z(&c_gz);
+
+        // RF events
+        let alpha_1 = RfEvent::new("alpha_1",&alpha_pulse,&c_rf);
+        let alpha_2 = RfEvent::new("alpha_2",&alpha_pulse,&c_rf).with_phase(&c_rf_phase);
+        let alpha_3 = RfEvent::new("alpha_3",&alpha_pulse,&c_rf);
+
+        // ACQ events
+        let acq_1 = ACQEvent::new("acq_1",self.n_samples,bw.inv());
+        let acq_2 = ACQEvent::new("acq_2",self.n_samples,bw.inv());
+
+        // event timing
+        let mut vl = SeqLoop::new_main("view",self.n_reps);
+        vl.add_event(ru).unwrap();
+        vl.add_event(alpha_1).unwrap();
+        vl.add_event(alpha_2).unwrap();
+        vl.add_event(acq_1).unwrap();
+        vl.add_event(alpha_3).unwrap();
+        vl.add_event(acq_2).unwrap();
+        vl.add_event(rd).unwrap();
+
+        // end uf ramp up to start of first rf pulse is 200 us
+        vl.set_time_span("ru","alpha_1",100,0,grad_stab_time).unwrap();
+
+        // time difference between center of first rf to second rf pulse is tau
+        vl.set_time_span("alpha_1","alpha_2",50,50,tau).unwrap();
+
+        // time difference between second rf pulse and spin echo is tau
+        vl.set_time_span("alpha_2","acq_1",50,50,tau).unwrap();
+
+        // time from spin echo to third rf pulse is t_fill
+        vl.set_time_span("acq_1","alpha_3",100,0,t_fill).unwrap();
+
+        // time from third pulse to stim echo is tau
+        vl.set_time_span("alpha_3","acq_2",50,50,tau).unwrap();
+
+        vl.set_min_time_span("acq_2","rd",100,0,Time::us(200)).unwrap();
+
+        vl.set_pre_calc(Time::ms(3));
+
+        vl.set_rep_time(rep_time).unwrap();
+
+        vl
+
+
     }
 }
