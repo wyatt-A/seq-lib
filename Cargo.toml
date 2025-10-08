@@ -1,0 +1,9 @@
+[package]
+name = "seq-lib"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+num-complex = "0.4.6"
+mr_units = {git = "ssh://git@github.com/wyatt-A/mr_units.git"}
+seq_struct = {git = "ssh://git@github.com/wyatt-A/seq_struct.git"}
