@@ -1,4 +1,6 @@
 mod rf_pulses;
+mod grad_pulses;
+
 pub use seq_struct;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{Angle, FieldGrad, Freq, Length, Time};
@@ -10,7 +12,7 @@ use seq_struct::rf_event::RfEvent;
 use seq_struct::rf_pulse::RfPulse;
 use seq_struct::seq_loop::SeqLoop;
 use seq_struct::waveform::Waveform;
-use crate::rf_pulses::{hardpulse, hardpulse_composite};
+use crate::rf_pulses::{hardpulse, hardpulse_composite, sinc5};
 
 #[cfg(test)]
 mod tests {
@@ -89,11 +91,17 @@ impl PulseSequence for SliceProfileSE {
         // single main loop structure
         let mut vl = SeqLoop::new_main("view",self.n_reps);
 
-        let p_exc = hardpulse(
+        let p_exc = sinc5(
             Time::us(self.exc_dur_us),
             rf_dt,
             Nuc1H
         ).to_shared();
+
+        // let p_exc = hardpulse(
+        //     Time::us(self.exc_dur_us),
+        //     rf_dt,
+        //     Nuc1H
+        // ).to_shared();
 
         let p_ref = hardpulse_composite(
             Time::us(self.ref_dur_us),
