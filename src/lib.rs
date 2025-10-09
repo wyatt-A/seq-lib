@@ -10,7 +10,7 @@ use seq_struct::rf_event::RfEvent;
 use seq_struct::rf_pulse::RfPulse;
 use seq_struct::seq_loop::SeqLoop;
 use seq_struct::waveform::Waveform;
-use crate::rf_pulses::hardpulse;
+use crate::rf_pulses::{hardpulse, hardpulse_composite};
 
 #[cfg(test)]
 mod tests {
@@ -95,7 +95,7 @@ impl PulseSequence for SliceProfileSE {
             Nuc1H
         ).to_shared();
 
-        let p_ref = hardpulse(
+        let p_ref = hardpulse_composite(
             Time::us(self.ref_dur_us),
             rf_dt,
             Nuc1H
