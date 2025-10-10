@@ -63,15 +63,15 @@ pub struct SliceProfileSE {
 impl Default for SliceProfileSE {
     fn default() -> SliceProfileSE {
         SliceProfileSE {
-            exc_dur_us: 140,
-            ref_dur_us: 280,
+            exc_dur_us: 500,
+            ref_dur_us: 500,
             ramp_time_us: 200,
             crush_dur_us: 300,
             bw_hz: 100_000.,
             n_reps: 10,
             fov_mm: 20.,
             n_samples: 256,
-            te_ms: 10.,
+            te_ms: 20.,
             rep_time_ms: 500.
         }
     }
@@ -97,14 +97,14 @@ impl PulseSequence for SliceProfileSE {
             Nuc1H
         ).to_shared();
 
-        // let p_exc = hardpulse(
+        // let p_ref = hardpulse(
         //     Time::us(self.exc_dur_us),
         //     rf_dt,
         //     Nuc1H
         // ).to_shared();
 
-        let p_ref = hardpulse_composite(
-            Time::us(self.ref_dur_us),
+        let p_ref = sinc5(
+            Time::us(self.exc_dur_us),
             rf_dt,
             Nuc1H
         ).to_shared();
@@ -210,9 +210,9 @@ impl Default for RfCal {
             n_reps: 10,
             n_samples: 256,
             bandwidth_hz: 50_000.,
-            tau_1_ms: 5.0,
-            tau_2_ms: 2.5,
-            rf_dur_us: 200,
+            tau_1_ms: 10.0,
+            tau_2_ms: 2.,
+            rf_dur_us: 500,
             grad_stab_time_ms: 2.,
             rep_time_ms: 500.,
         }
@@ -254,16 +254,18 @@ impl PulseSequence for RfCal {
             .to_shared();
 
         // RF pulses
-        let n_alpha_samples = (rf_dur / rf_dt).si() as usize;
-        let alpha_pulse = RfPulse::new(
-            &Waveform::new().add_list_r(
-                &vec![1.;n_alpha_samples],
-                rf_dt
-            ).to_shared(),
-            3.,
-            Nuc1H
-        ).to_shared();
+        //let n_alpha_samples = (rf_dur / rf_dt).si() as usize;
 
+        let alpha_pulse = sinc5(rf_dur,rf_dt,Nuc1H).to_shared();
+
+        // let alpha_pulse = RfPulse::new(
+        //     &Waveform::new().add_list_r(
+        //         &vec![1.;n_alpha_samples],
+        //         rf_dt
+        //     ).to_shared(),
+        //     3.,
+        //     Nuc1H
+        // ).to_shared();
 
         // Grad waveforms
         let ramp_up = Waveform::new()
