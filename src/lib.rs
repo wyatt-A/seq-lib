@@ -1,6 +1,7 @@
 mod rf_pulses;
 mod grad_pulses;
 
+use std::collections::HashMap;
 pub use seq_struct;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{Angle, FieldGrad, Freq, Length, Time};
@@ -35,7 +36,9 @@ mod tests {
         };
 
         let seq = s.compile();
-
+        let adj_state = s.adjustment_state();
+        let t = seq.render_timeline(&adj_state);
+        t.write_to_file("se_out.txt")
     }
 
 }
@@ -45,6 +48,7 @@ pub trait PulseSequence: Default {
     /// main pulse sequence generation routine. This is where all the pulse sequence logic is
     /// implemented
     fn compile(&self) -> SeqLoop;
+    fn adjustment_state(&self) -> HashMap<String,f64>;
 }
 
 pub struct SliceProfileSE {
@@ -78,6 +82,18 @@ impl Default for SliceProfileSE {
 }
 
 impl PulseSequence for SliceProfileSE {
+    // define all adjustment states
+    fn adjustment_state(&self) -> HashMap<String,f64> {
+        let mut state = HashMap::new();
+        state.insert("exc_pow".to_string(),1.);
+        state.insert("ref_pow".to_string(),2.);
+        state.insert("ss".to_string(),0.5);
+        state.insert("ss_ref".to_string(),0.1);
+        state.insert("crush".to_string(),0.5);
+        state.insert("prephase".to_string(),0.5);
+        state
+    }
+
     fn compile(&self) -> SeqLoop {
 
         let rf_dt = Time::us(2);
@@ -333,5 +349,15 @@ impl PulseSequence for RfCal {
         vl
 
 
+    }
+
+    fn adjustment_state(&self) -> HashMap<String, f64> {
+        let mut state = HashMap::new();
+        state.insert("slice_x".to_string(), 0.2);
+        state.insert("slice_y".to_string(), 0.0);
+        state.insert("slice_z".to_string(), 0.0);
+        state.insert("rf_pow".to_string(), 1.0);
+        state.insert("rf_phase".to_string(), 0.0);
+        state
     }
 }
