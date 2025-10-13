@@ -1,5 +1,6 @@
 mod rf_pulses;
 mod grad_pulses;
+mod ring_down;
 
 use std::collections::HashMap;
 pub use seq_struct;
