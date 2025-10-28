@@ -18,7 +18,7 @@ pub struct RingDown {
     ramp_time_us: usize,
     grad_pulse_dur_ms: f64,
     rf_pulse_dur_us: usize,
-    ring_delay_us: usize,
+    pub ring_delay_us: usize,
     acq_delay_us: usize,
     rep_time_ms: f64,
 }

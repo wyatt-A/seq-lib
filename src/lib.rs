@@ -1,6 +1,7 @@
 mod rf_pulses;
 mod grad_pulses;
-mod ring_down;
+pub mod ring_down;
+pub mod se3d;
 
 use std::collections::HashMap;
 pub use seq_struct;
@@ -273,7 +274,8 @@ impl PulseSequence for RfCal {
         // RF pulses
         //let n_alpha_samples = (rf_dur / rf_dt).si() as usize;
 
-        let alpha_pulse = sinc5(rf_dur,rf_dt,Nuc1H).to_shared();
+        //let alpha_pulse = sinc5(rf_dur,rf_dt,Nuc1H).to_shared();
+        let alpha_pulse = hardpulse(rf_dur,rf_dt,Nuc1H).to_shared();
 
         // let alpha_pulse = RfPulse::new(
         //     &Waveform::new().add_list_r(
