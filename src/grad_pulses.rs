@@ -11,3 +11,13 @@ pub fn half_sin(duration:Time, dt:Time) -> Waveform {
     let n_samples = (duration / dt).si().round() as usize;
     Waveform::new().add_half_sin(0,n_samples,dt)
 }
+
+pub fn ramp_up(duration:Time, dt:Time) -> Waveform {
+    let n_samples = (duration / dt).si().round() as usize;
+    Waveform::new().ramp(0, 1, n_samples, dt)
+}
+
+pub fn ramp_down(duration:Time, dt:Time) -> Waveform {
+    let n_samples = (duration / dt).si().round() as usize;
+    Waveform::new().ramp(1, 0, n_samples, dt)
+}

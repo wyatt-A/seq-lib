@@ -41,10 +41,14 @@ pub fn sinc1(duration:Time, dt:Time, nuc:Nucleus) -> RfPulse {
 }
 
 pub fn sinc3(duration:Time, dt:Time, nuc:Nucleus) -> RfPulse {
+    // sinc samples
     let n_samples = (duration / dt).si().round() as usize;
     let x = linspace(-2. * PI,2. * PI,n_samples);
+
+    // hanning window samples
     let h_x = linspace(-PI,PI,n_samples);
     let h = h_x.into_iter().map(|x| (x.cos() + 1.) / 2. );
+
     let y:Vec<_> = x.into_iter().zip(h).map(|(x,h)| {
         if x == 0. {
             1.

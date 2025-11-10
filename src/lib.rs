@@ -2,13 +2,17 @@ mod rf_pulses;
 mod grad_pulses;
 pub mod ring_down;
 pub mod se3d;
+pub mod ssme;
+pub mod bloch;
 
 use std::collections::HashMap;
+use std::path::Path;
 pub use seq_struct;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{Angle, FieldGrad, Freq, Length, Time};
 use mr_units::quantity::Unit;
 use seq_struct::acq_event::ACQEvent;
+use seq_struct::compile::Timeline;
 use seq_struct::grad_strength::EventControl;
 use seq_struct::gradient_event::GradEvent;
 use seq_struct::rf_event::RfEvent;
@@ -25,8 +29,7 @@ mod tests {
     pub fn slice_profile_se() {
 
         let s = SliceProfileSE {
-            exc_dur_us: 140,
-            ref_dur_us: 280,
+            rf_dur_us: 140,
             ramp_time_us: 200,
             crush_dur_us: 300,
             bw_hz: 100_000.,
@@ -51,11 +54,19 @@ pub trait PulseSequence: Default {
     /// implemented
     fn compile(&self) -> SeqLoop;
     fn adjustment_state(&self) -> HashMap<String,f64>;
+
+    fn render(&self,state:&HashMap<String,f64>) -> Timeline {
+        self.compile().render_timeline(state)
+    }
+
+    fn render_to_file(&self, state:&HashMap<String,f64>, filename:impl AsRef<Path>) {
+        self.render(state).write_to_file(filename)
+    }
+
 }
 
 pub struct SliceProfileSE {
-    exc_dur_us: usize,
-    ref_dur_us: usize,
+    rf_dur_us: usize,
     ramp_time_us: usize,
     crush_dur_us: usize,
     bw_hz: f64,
@@ -69,8 +80,7 @@ pub struct SliceProfileSE {
 impl Default for SliceProfileSE {
     fn default() -> SliceProfileSE {
         SliceProfileSE {
-            exc_dur_us: 500,
-            ref_dur_us: 500,
+            rf_dur_us: 500,
             ramp_time_us: 200,
             crush_dur_us: 300,
             bw_hz: 100_000.,
@@ -110,7 +120,7 @@ impl PulseSequence for SliceProfileSE {
         let mut vl = SeqLoop::new_main("view",self.n_reps);
 
         let p_exc = sinc5(
-            Time::us(self.exc_dur_us),
+            Time::us(self.rf_dur_us),
             rf_dt,
             Nuc1H
         ).to_shared();
@@ -122,7 +132,7 @@ impl PulseSequence for SliceProfileSE {
         // ).to_shared();
 
         let p_ref = sinc5(
-            Time::us(self.exc_dur_us),
+            Time::us(self.rf_dur_us),
             rf_dt,
             Nuc1H
         ).to_shared();
@@ -131,7 +141,7 @@ impl PulseSequence for SliceProfileSE {
         // let w_ru = Waveform::new().ramp(0,1,n_ramp_samp,grad_dt);
         // let w_rd = Waveform::new().ramp(1,0,n_ramp_samp,grad_dt);
 
-        let n_ss_samp = (Time::us(self.exc_dur_us * 3) / grad_dt).si().round() as usize;
+        let n_ss_samp = (Time::us(self.rf_dur_us * 3) / grad_dt).si().round() as usize;
         let w_ss = Waveform::new().ramp(0,1,n_ramp_samp,grad_dt)
             .constant(1,n_ss_samp,grad_dt)
             .ramp(1,0,n_ramp_samp,grad_dt)
