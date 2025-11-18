@@ -7,7 +7,13 @@ use seq_struct::waveform::{linspace, Waveform};
 
 pub fn hardpulse(duration:Time, dt:Time, nucleus: Nucleus) -> RfPulse {
     let n_samples = (duration / dt).si().round() as usize;
-    let w = Waveform::new().constant(1,n_samples,dt).to_shared();
+
+    let mut samples = vec![1.; n_samples];
+    samples.push(0.);
+    samples.insert(0,0.);
+
+    let w = Waveform::new().add_list_r(&samples,dt).to_shared();
+
     RfPulse::new(&w,2.,nucleus)
 }
 
@@ -18,6 +24,10 @@ pub fn hardpulse_composite(duration:Time, dt:Time, nucleus: Nucleus) -> RfPulse 
     let mut s = vec![Complex64::ONE;n_0];
     s.extend(vec![Complex64::i();n_90]);
     s.extend(vec![Complex64::ONE;n_0]);
+
+    s.push(Complex64::ZERO);
+    s.insert(0,Complex64::ZERO);
+
     let w = Waveform::new().add_list_c(&s,dt).to_shared();
     RfPulse::new(&w,2.,nucleus)
 }

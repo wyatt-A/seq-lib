@@ -3,7 +3,7 @@ mod grad_pulses;
 pub mod ring_down;
 pub mod se3d;
 pub mod ssme;
-pub mod bloch;
+pub mod dwi3d;
 
 use std::collections::HashMap;
 use std::path::Path;
