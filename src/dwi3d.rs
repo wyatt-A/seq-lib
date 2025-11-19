@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::Read;
 use std::rc::Rc;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{Angle, FieldGrad, Freq, Length, Time};
@@ -26,10 +28,10 @@ pub struct Dwi3DParams {
     n_x: usize,
     n_y: usize,
     n_z: usize,
-    n_views: usize,
     rep_time_ms: f64,
     bw_hz:f64,
     diff2_delay_us: usize,
+    n_views: usize,
 }
 
 impl Default for Dwi3DParams {
@@ -45,8 +47,8 @@ impl Default for Dwi3DParams {
             n_x: 394,
             n_y: 256,
             n_z: 256,
-            n_views: 1,
             rep_time_ms: 100.,
+            n_views: 100,
             bw_hz: 100_000.,
             diff2_delay_us: 1000,
         }
@@ -57,7 +59,7 @@ impl Default for Dwi3DParams {
 impl Dwi3DParams {
 
 
-    fn adjust(&self, del2:Time) -> SeqLoop {
+    fn init(&self, del2:Time) -> SeqLoop {
         let w = Waveforms::new(&self);
         let ec = EventControllers::new(&self,&w);
         let events = Events::new(&self,&w,&ec);
@@ -101,11 +103,11 @@ impl Dwi3DParams {
         vl
     }
 
-    fn init(&self) -> Time {
+    fn find_delay_correction(&self) -> Time {
 
         let del2 = Time::us(100);
 
-        let vl = self.adjust(del2);
+        let vl = self.init(del2);
 
         // we need to make sure that tau makes sense and adjust other delays if needed
         let tau2 = vl.get_time_span("rf180","acq",50,50).unwrap();
@@ -132,8 +134,8 @@ impl Dwi3DParams {
 
 impl PulseSequence for Dwi3DParams {
     fn compile(&self) -> SeqLoop {
-        let del2 = self.init();
-        let vl = self.adjust(del2);
+        let del2 = self.find_delay_correction();
+        let vl = self.init(del2);
 
         let te = Self::report_echo_time(&vl);
         let b_delta = Self::report_big_delta(&vl);
@@ -279,8 +281,19 @@ impl EventControllers {
 
         let c_ro = EventControl::<FieldGrad>::new().with_constant_grad(g_ro).to_shared();
 
-        let lut_pe_y = LUT::new("pe_y",&vec![0;params.n_views]).to_shared();
-        let lut_pe_z = LUT::new("pe_z",&vec![0;params.n_views]).to_shared();
+        let mut f = File::open("stream_CS256_8x_pa18_pb54").unwrap();
+        let mut s = String::new();
+        f.read_to_string(&mut s).unwrap();
+        let values = s.lines().map(|line|line.parse::<i32>().unwrap()).collect::<Vec<i32>>();
+        let mut pe_y_vals = vec![];
+        let mut pe_z_vals = vec![];
+        values.windows(2).for_each(|x|{
+            pe_y_vals.push(x[0]);
+            pe_z_vals.push(x[1]);
+        });
+
+        let lut_pe_y = LUT::new("pe_y",&pe_y_vals).to_shared();
+        let lut_pe_z = LUT::new("pe_z",&pe_z_vals).to_shared();
 
         // characteristic time for the readout gradient
         let acq_time:Time = (
