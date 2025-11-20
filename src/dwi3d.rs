@@ -18,20 +18,20 @@ use crate::PulseSequence;
 use crate::rf_pulses::{hardpulse, hardpulse_composite, sinc3};
 
 pub struct Dwi3DParams {
-    diffusion_ramp_time_us: u32,
-    diffusion_const_time_ms: f64,
-    ramp_time_us: u32,
-    pe_time_ms: f64,
-    fov_x_mm: f64,
-    fov_y_mm: f64,
-    fov_z_mm: f64,
-    n_x: usize,
-    n_y: usize,
-    n_z: usize,
-    rep_time_ms: f64,
-    bw_hz:f64,
-    diff2_delay_us: usize,
-    n_views: usize,
+    pub diffusion_ramp_time_us: u32,
+    pub diffusion_const_time_ms: f64,
+    pub ramp_time_us: u32,
+    pub pe_time_ms: f64,
+    pub fov_x_mm: f64,
+    pub fov_y_mm: f64,
+    pub fov_z_mm: f64,
+    pub n_x: usize,
+    pub n_y: usize,
+    pub n_z: usize,
+    pub rep_time_ms: f64,
+    pub bw_hz:f64,
+    pub diff2_delay_us: usize,
+    pub n_views: usize,
 }
 
 impl Default for Dwi3DParams {
@@ -48,7 +48,7 @@ impl Default for Dwi3DParams {
             n_y: 256,
             n_z: 256,
             rep_time_ms: 100.,
-            n_views: 100,
+            n_views: 4,
             bw_hz: 100_000.,
             diff2_delay_us: 1000,
         }
@@ -90,7 +90,7 @@ impl Dwi3DParams {
 
         vl.set_time_span("rf180","diff2",100,0,del3).unwrap();
 
-        vl.set_min_time_span("ru","acq",100,0,Time::us(0)).unwrap();
+        vl.set_time_span("ru","acq",100,0,Time::us(100)).unwrap();
         vl.set_min_time_span("acq","rd",100,0,Time::us(0)).unwrap();
         vl.set_time_span("pe","ru",100,0,Time::us(100)).unwrap();
 
@@ -281,16 +281,19 @@ impl EventControllers {
 
         let c_ro = EventControl::<FieldGrad>::new().with_constant_grad(g_ro).to_shared();
 
-        let mut f = File::open("stream_CS256_8x_pa18_pb54").unwrap();
+        let mut f = File::open(r"C:\workstation\data\petableCS_stream\stream_CS256_8x_pa18_pb54").unwrap();
         let mut s = String::new();
         f.read_to_string(&mut s).unwrap();
         let values = s.lines().map(|line|line.parse::<i32>().unwrap()).collect::<Vec<i32>>();
         let mut pe_y_vals = vec![];
         let mut pe_z_vals = vec![];
-        values.windows(2).for_each(|x|{
+        values.chunks_exact(2).for_each(|x|{
             pe_y_vals.push(x[0]);
             pe_z_vals.push(x[1]);
         });
+
+        //let pe_y_vals = vec![0;params.n_views];
+        //let pe_z_vals = vec![0;params.n_views];
 
         let lut_pe_y = LUT::new("pe_y",&pe_y_vals).to_shared();
         let lut_pe_z = LUT::new("pe_z",&pe_z_vals).to_shared();
@@ -301,7 +304,7 @@ impl EventControllers {
                 Time::us(params.ramp_time_us).quantity())
             .try_into().unwrap();
 
-        let pe_time = waveforms.phase_encode.integrate_real();
+        let pe_time = Time::ms(params.pe_time_ms + Time::us(params.ramp_time_us).as_ms());
         let ratio = (acq_time / pe_time).si();
         let c_pe_x = EventControl::<FieldGrad>::new().with_constant_grad(
             g_ro.scale( - ratio / 2.),
@@ -312,7 +315,7 @@ impl EventControllers {
         let c_pe_y = EventControl::<FieldGrad>::new().with_grad_scale(
             FieldGrad::from_fov(
                 Length::mm(params.fov_y_mm),
-                waveforms.phase_encode.integrate_real(),
+                pe_time,
                 Nuc1H,
             )
         )
@@ -323,7 +326,7 @@ impl EventControllers {
         let c_pe_z = EventControl::<FieldGrad>::new().with_grad_scale(
             FieldGrad::from_fov(
                 Length::mm(params.fov_z_mm),
-                waveforms.phase_encode.integrate_real(),
+                pe_time,
                 Nuc1H,
             )
         )
@@ -331,9 +334,10 @@ impl EventControllers {
             .with_lut(&lut_pe_z)
             .to_shared();
 
-        let c_diff_x = EventControl::<FieldGrad>::new().with_adj("diff_x").to_shared();
-        let c_diff_y = EventControl::<FieldGrad>::new().with_adj("diff_y").to_shared();
-        let c_diff_z = EventControl::<FieldGrad>::new().with_adj("diff_z").to_shared();
+        //let c_diff_x = EventControl::<FieldGrad>::new().with_constant_grad(FieldGrad::mt_per_meter(2360)).with_adj("diff_x").to_shared();
+        let c_diff_x = EventControl::<FieldGrad>::new().with_constant_grad(FieldGrad::mt_per_meter(0)).with_adj("diff_x").to_shared();
+        let c_diff_y = EventControl::<FieldGrad>::new().with_constant_grad(FieldGrad::mt_per_meter(0.)).with_adj("diff_y").to_shared();
+        let c_diff_z = EventControl::<FieldGrad>::new().with_constant_grad(FieldGrad::mt_per_meter(0.)).with_adj("diff_z").to_shared();
 
         let c_rf90 = EventControl::<f64>::new().with_adj("rf90_pow").to_shared();
         let c_rf180 = EventControl::<f64>::new().with_adj("rf180_pow").to_shared();
@@ -357,7 +361,53 @@ impl EventControllers {
 
 
 
+pub fn cumtrapz(t: &[f64], x: &[f64]) -> Vec<f64> {
+    assert_eq!(
+        t.len(),
+        x.len(),
+        "t and x must have the same length (got {} and {})",
+        t.len(),
+        x.len()
+    );
 
+    let n = t.len();
 
+    // Empty input → empty output
+    if n == 0 {
+        return Vec::new();
+    }
 
+    let mut y = Vec::with_capacity(n);
+    y.push(0.0_f64); // y[0] = 0, like MATLAB cumtrapz
 
+    for i in 1..n {
+        let dt = t[i] - t[i - 1];
+        let area = 0.5 * (x[i - 1] + x[i]) * dt;
+        let cum = y[i - 1] + area;
+        y.push(cum);
+    }
+
+    y
+}
+
+pub fn trapz(t: &[f64], x: &[f64]) -> f64 {
+    assert_eq!(
+        t.len(),
+        x.len(),
+        "t and x must have the same length (got {} and {})",
+        t.len(),
+        x.len()
+    );
+
+    let n = t.len();
+    if n < 2 {
+        return 0.0;
+    }
+
+    let mut sum = 0.0f64;
+    for i in 1..n {
+        let dt = t[i] - t[i - 1];
+        sum += 0.5 * (x[i - 1] + x[i]) * dt;
+    }
+    sum
+}
