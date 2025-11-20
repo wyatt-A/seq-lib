@@ -48,16 +48,14 @@ impl Default for Dwi3DParams {
             n_y: 256,
             n_z: 256,
             rep_time_ms: 100.,
-            n_views: 4,
+            n_views: 1,
             bw_hz: 100_000.,
             diff2_delay_us: 1000,
         }
     }
 }
 
-
 impl Dwi3DParams {
-
 
     fn init(&self, del2:Time) -> SeqLoop {
         let w = Waveforms::new(&self);
@@ -124,6 +122,8 @@ impl Dwi3DParams {
         vl.get_time_span("rf90","acq",50,50).unwrap()
     }
 
+
+
     pub fn report_big_delta(vl:&SeqLoop) -> Time {
         vl.get_time_span("diff1","diff2",0,0).unwrap()
     }
@@ -150,11 +150,11 @@ impl PulseSequence for Dwi3DParams {
         HashMap::from_iter(
             [
                 ("read_prephase".to_string(), 0.),
-                ("diff_x".to_string(), 1.0),
-                ("diff_y".to_string(), 1.0),
-                ("diff_z".to_string(), 1.0),
-                ("rf90_pow".to_string(), 1.0),
-                ("rf180_pow".to_string(), 2.0),
+                ("diff_x".to_string(), 0.0),
+                ("diff_y".to_string(), 0.0),
+                ("diff_z".to_string(), 0.0),
+                ("rf90_pow".to_string(), 0.0),
+                ("rf180_pow".to_string(), 0.0),
                 ("rf180_phase".to_string(), 0.0),
             ]
         )
@@ -281,7 +281,8 @@ impl EventControllers {
 
         let c_ro = EventControl::<FieldGrad>::new().with_constant_grad(g_ro).to_shared();
 
-        let mut f = File::open(r"C:\workstation\data\petableCS_stream\stream_CS256_8x_pa18_pb54").unwrap();
+        //let mut f = File::open(r"C:\workstation\data\petableCS_stream\stream_CS256_8x_pa18_pb54").unwrap();
+        let mut f = File::open(r"stream_CS256_8x_pa18_pb54").unwrap();
         let mut s = String::new();
         f.read_to_string(&mut s).unwrap();
         let values = s.lines().map(|line|line.parse::<i32>().unwrap()).collect::<Vec<i32>>();
@@ -357,57 +358,4 @@ impl EventControllers {
         }
 
     }
-}
-
-
-
-pub fn cumtrapz(t: &[f64], x: &[f64]) -> Vec<f64> {
-    assert_eq!(
-        t.len(),
-        x.len(),
-        "t and x must have the same length (got {} and {})",
-        t.len(),
-        x.len()
-    );
-
-    let n = t.len();
-
-    // Empty input → empty output
-    if n == 0 {
-        return Vec::new();
-    }
-
-    let mut y = Vec::with_capacity(n);
-    y.push(0.0_f64); // y[0] = 0, like MATLAB cumtrapz
-
-    for i in 1..n {
-        let dt = t[i] - t[i - 1];
-        let area = 0.5 * (x[i - 1] + x[i]) * dt;
-        let cum = y[i - 1] + area;
-        y.push(cum);
-    }
-
-    y
-}
-
-pub fn trapz(t: &[f64], x: &[f64]) -> f64 {
-    assert_eq!(
-        t.len(),
-        x.len(),
-        "t and x must have the same length (got {} and {})",
-        t.len(),
-        x.len()
-    );
-
-    let n = t.len();
-    if n < 2 {
-        return 0.0;
-    }
-
-    let mut sum = 0.0f64;
-    for i in 1..n {
-        let dt = t[i] - t[i - 1];
-        sum += 0.5 * (x[i - 1] + x[i]) * dt;
-    }
-    sum
 }

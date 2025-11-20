@@ -4,6 +4,7 @@ pub mod ring_down;
 pub mod se3d;
 pub mod ssme;
 pub mod dwi3d;
+pub mod q_calc;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -55,12 +56,13 @@ pub trait PulseSequence: Default {
     fn compile(&self) -> SeqLoop;
     fn adjustment_state(&self) -> HashMap<String,f64>;
 
-    fn render(&self,state:&HashMap<String,f64>) -> Timeline {
-        self.compile().render_timeline(state)
+    /// render sequence timeline `[t,Gx,Gy,Gz,Bx,By,rec]` where t (sec), G (T/m), B (T), rec (rad)
+    fn render(&self,state:&HashMap<String,f64>) -> Vec<[f64;7]> {
+        self.compile().render_timeline(state).render()
     }
 
     fn render_to_file(&self, state:&HashMap<String,f64>, filename:impl AsRef<Path>) {
-        self.render(state).write_to_file(filename)
+        self.compile().render_timeline(state).write_to_file(filename)
     }
 
 }
