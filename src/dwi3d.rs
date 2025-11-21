@@ -30,7 +30,6 @@ pub struct Dwi3DParams {
     pub n_z: usize,
     pub rep_time_ms: f64,
     pub bw_hz:f64,
-    pub diff2_delay_us: usize,
     pub n_views: usize,
 }
 
@@ -50,16 +49,15 @@ impl Default for Dwi3DParams {
             rep_time_ms: 100.,
             n_views: 1,
             bw_hz: 100_000.,
-            diff2_delay_us: 1000,
         }
     }
 }
 
 impl Dwi3DParams {
 
-    fn init(&self, del2:Time) -> SeqLoop {
+    fn view_loop(&self) -> SeqLoop {
         let w = Waveforms::new(&self);
-        let ec = EventControllers::new(&self,&w);
+        let ec = EventControllers::new(&self);
         let events = Events::new(&self,&w,&ec);
 
         let mut vl = SeqLoop::new_main("view",self.n_views);
@@ -75,58 +73,79 @@ impl Dwi3DParams {
 
         // time between end of rf90 and start of first diffusion pulse
         let del1 = Time::us(100);
-
+        let del2 = Time::us(100);
         // time between end of rf180 and start of second diffusion pulse
-        let del3 = Time::us(100);
+        let del3 = Time::ms(1);
 
         // set time between end of excitation pulse and start of first diffusion pulse
         vl.set_time_span("rf90","diff1",100,0,del1).unwrap();
+        vl.set_time_span("rf180","diff2",100,0,del2).unwrap();
 
         // set delay between end of first diffusion pulse and refocusing pulse. This determines the echo time
-        vl.set_time_span("diff1","rf180",100,0,del2).unwrap();
+        //vl.set_time_span("diff1","rf180",100,0,del2).unwrap();
         //vl.set_time_span("diff1","diff2",0,0,Time::ms(big_delta_ms)).unwrap();
 
-        vl.set_time_span("rf180","diff2",100,0,del3).unwrap();
-
+        vl.set_min_time_span("diff2","pe",100,0,del3).unwrap();
+        vl.set_time_span("pe","ru",100,0,Time::us(100)).unwrap();
         vl.set_time_span("ru","acq",100,0,Time::us(100)).unwrap();
         vl.set_min_time_span("acq","rd",100,0,Time::us(0)).unwrap();
-        vl.set_time_span("pe","ru",100,0,Time::us(100)).unwrap();
 
-        vl.set_min_time_span("diff2","pe",100,0,Time::us(self.diff2_delay_us)).unwrap();
+        let tau = vl.get_time_span("rf180","acq",50,50).unwrap();
 
-        vl.set_pre_calc(Time::ms(2));
-
-        vl.set_rep_time(Time::ms(self.rep_time_ms)).unwrap();
+        if let Err(e) = vl.set_time_span("rf90","rf180",50,50,tau) {
+            panic!("failed to set tau. You must lengthen the time between the inversion pulse and echo: {:?}",e);
+        }
 
         vl
     }
 
-    fn find_delay_correction(&self) -> Time {
-
-        let del2 = Time::us(100);
-
-        let vl = self.init(del2);
-
-        // we need to make sure that tau makes sense and adjust other delays if needed
-        let tau2 = vl.get_time_span("rf180","acq",50,50).unwrap();
-        let tau1 = vl.get_time_span("rf90","rf180",50,50).unwrap();
-
-        println!("tau1 = {} ms",tau1.as_ms());
-        println!("tau2 = {} ms",tau2.as_ms());
-
-        Time::us(tau2.as_us() - tau1.as_us() + del2.as_us())
-
-    }
-
-    pub fn report_echo_time(vl:&SeqLoop) -> Time {
-        vl.get_time_span("rf90","acq",50,50).unwrap()
-    }
 
 
 
-    pub fn report_big_delta(vl:&SeqLoop) -> Time {
-        vl.get_time_span("diff1","diff2",0,0).unwrap()
-    }
+
+    // fn init(&self, del2:Time) -> SeqLoop {
+    //     let w = Waveforms::new(&self);
+    //     let ec = EventControllers::new(&self);
+    //     let events = Events::new(&self,&w,&ec);
+    //
+    //     let mut vl = SeqLoop::new_main("view",self.n_views);
+    //
+    //     vl.add_event(events.rf90).unwrap();
+    //     vl.add_event(events.diff1).unwrap();
+    //     vl.add_event(events.rf180).unwrap();
+    //     vl.add_event(events.diff2).unwrap();
+    //     vl.add_event(events.phase_enc).unwrap();
+    //     vl.add_event(events.read_ru).unwrap();
+    //     vl.add_event(events.acq).unwrap();
+    //     vl.add_event(events.read_rd).unwrap();
+    //
+    //     // time between end of rf90 and start of first diffusion pulse
+    //     let del1 = Time::us(100);
+    //
+    //     // time between end of rf180 and start of second diffusion pulse
+    //     let del3 = Time::us(100);
+    //
+    //     // set time between end of excitation pulse and start of first diffusion pulse
+    //     vl.set_time_span("rf90","diff1",100,0,del1).unwrap();
+    //
+    //     // set delay between end of first diffusion pulse and refocusing pulse. This determines the echo time
+    //     vl.set_time_span("diff1","rf180",100,0,del2).unwrap();
+    //     //vl.set_time_span("diff1","diff2",0,0,Time::ms(big_delta_ms)).unwrap();
+    //
+    //     vl.set_time_span("rf180","diff2",100,0,del3).unwrap();
+    //
+    //     vl.set_time_span("ru","acq",100,0,Time::us(100)).unwrap();
+    //     vl.set_min_time_span("acq","rd",100,0,Time::us(0)).unwrap();
+    //     vl.set_time_span("pe","ru",100,0,Time::us(100)).unwrap();
+    //
+    //     vl.set_min_time_span("diff2","pe",100,0,Time::us(self.diff2_delay_us)).unwrap();
+    //
+    //     vl.set_pre_calc(Time::ms(2));
+    //
+    //     vl.set_rep_time(Time::ms(self.rep_time_ms)).unwrap();
+    //
+    //     vl
+    // }
 
 }
 
@@ -134,16 +153,7 @@ impl Dwi3DParams {
 
 impl PulseSequence for Dwi3DParams {
     fn compile(&self) -> SeqLoop {
-        let del2 = self.find_delay_correction();
-        let vl = self.init(del2);
-
-        let te = Self::report_echo_time(&vl);
-        let b_delta = Self::report_big_delta(&vl);
-
-        println!("echo time: {} ms",te.as_ms());
-        println!("Delta: {} ms",b_delta.as_ms());
-
-        vl
+        self.view_loop()
     }
 
     fn adjustment_state(&self) -> HashMap<String, f64> {
@@ -271,7 +281,7 @@ struct EventControllers {
 }
 
 impl EventControllers {
-    pub fn new(params:&Dwi3DParams,waveforms:&Waveforms) -> EventControllers {
+    pub fn new(params:&Dwi3DParams) -> EventControllers {
 
         let g_ro = FieldGrad::from_fov(
             Length::mm(params.fov_x_mm),
