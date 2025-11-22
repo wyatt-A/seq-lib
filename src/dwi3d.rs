@@ -81,10 +81,6 @@ impl Dwi3DParams {
         vl.set_time_span("rf90","diff1",100,0,del1).unwrap();
         vl.set_time_span("rf180","diff2",100,0,del2).unwrap();
 
-        // set delay between end of first diffusion pulse and refocusing pulse. This determines the echo time
-        //vl.set_time_span("diff1","rf180",100,0,del2).unwrap();
-        //vl.set_time_span("diff1","diff2",0,0,Time::ms(big_delta_ms)).unwrap();
-
         vl.set_min_time_span("diff2","pe",100,0,del3).unwrap();
         vl.set_time_span("pe","ru",100,0,Time::us(100)).unwrap();
         vl.set_time_span("ru","acq",100,0,Time::us(100)).unwrap();
@@ -96,56 +92,11 @@ impl Dwi3DParams {
             panic!("failed to set tau. You must lengthen the time between the inversion pulse and echo: {:?}",e);
         }
 
+        vl.set_pre_calc(Time::ms(2));
+        vl.set_rep_time(Time::ms(self.rep_time_ms)).unwrap();
+
         vl
     }
-
-
-
-
-
-    // fn init(&self, del2:Time) -> SeqLoop {
-    //     let w = Waveforms::new(&self);
-    //     let ec = EventControllers::new(&self);
-    //     let events = Events::new(&self,&w,&ec);
-    //
-    //     let mut vl = SeqLoop::new_main("view",self.n_views);
-    //
-    //     vl.add_event(events.rf90).unwrap();
-    //     vl.add_event(events.diff1).unwrap();
-    //     vl.add_event(events.rf180).unwrap();
-    //     vl.add_event(events.diff2).unwrap();
-    //     vl.add_event(events.phase_enc).unwrap();
-    //     vl.add_event(events.read_ru).unwrap();
-    //     vl.add_event(events.acq).unwrap();
-    //     vl.add_event(events.read_rd).unwrap();
-    //
-    //     // time between end of rf90 and start of first diffusion pulse
-    //     let del1 = Time::us(100);
-    //
-    //     // time between end of rf180 and start of second diffusion pulse
-    //     let del3 = Time::us(100);
-    //
-    //     // set time between end of excitation pulse and start of first diffusion pulse
-    //     vl.set_time_span("rf90","diff1",100,0,del1).unwrap();
-    //
-    //     // set delay between end of first diffusion pulse and refocusing pulse. This determines the echo time
-    //     vl.set_time_span("diff1","rf180",100,0,del2).unwrap();
-    //     //vl.set_time_span("diff1","diff2",0,0,Time::ms(big_delta_ms)).unwrap();
-    //
-    //     vl.set_time_span("rf180","diff2",100,0,del3).unwrap();
-    //
-    //     vl.set_time_span("ru","acq",100,0,Time::us(100)).unwrap();
-    //     vl.set_min_time_span("acq","rd",100,0,Time::us(0)).unwrap();
-    //     vl.set_time_span("pe","ru",100,0,Time::us(100)).unwrap();
-    //
-    //     vl.set_min_time_span("diff2","pe",100,0,Time::us(self.diff2_delay_us)).unwrap();
-    //
-    //     vl.set_pre_calc(Time::ms(2));
-    //
-    //     vl.set_rep_time(Time::ms(self.rep_time_ms)).unwrap();
-    //
-    //     vl
-    // }
 
 }
 
@@ -292,16 +243,19 @@ impl EventControllers {
         let c_ro = EventControl::<FieldGrad>::new().with_constant_grad(g_ro).to_shared();
 
         //let mut f = File::open(r"C:\workstation\data\petableCS_stream\stream_CS256_8x_pa18_pb54").unwrap();
-        let mut f = File::open(r"stream_CS256_8x_pa18_pb54").unwrap();
-        let mut s = String::new();
-        f.read_to_string(&mut s).unwrap();
-        let values = s.lines().map(|line|line.parse::<i32>().unwrap()).collect::<Vec<i32>>();
-        let mut pe_y_vals = vec![];
-        let mut pe_z_vals = vec![];
-        values.chunks_exact(2).for_each(|x|{
-            pe_y_vals.push(x[0]);
-            pe_z_vals.push(x[1]);
-        });
+        // let mut f = File::open(r"stream_CS256_8x_pa18_pb54").unwrap();
+        // let mut s = String::new();
+        // f.read_to_string(&mut s).unwrap();
+        // let values = s.lines().map(|line|line.parse::<i32>().unwrap()).collect::<Vec<i32>>();
+        // let mut pe_y_vals = vec![];
+        // let mut pe_z_vals = vec![];
+        // values.chunks_exact(2).for_each(|x|{
+        //     pe_y_vals.push(x[0]);
+        //     pe_z_vals.push(x[1]);
+        // });
+
+        let pe_y_vals = vec![128;4];
+        let pe_z_vals = vec![64;4];
 
         //let pe_y_vals = vec![0;params.n_views];
         //let pe_z_vals = vec![0;params.n_views];

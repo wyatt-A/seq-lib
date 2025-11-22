@@ -198,7 +198,7 @@ impl Default for SSMEParams {
     fn default() -> SSMEParams {
         SSMEParams {
             n_samples: 512,
-            n_phase: 5,
+            n_phase: 4,
             n_echoes: 4,
             bw_hz: 100_000.,
             fov_read_mm: 20.0,
