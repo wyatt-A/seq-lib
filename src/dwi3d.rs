@@ -54,7 +54,7 @@ impl Default for Dwi3DParams {
 
 impl Dwi3DParams {
 
-    pub fn calc_b_matrix(&self, adj_state:&HashMap<String,f64>) -> BMat {
+    pub fn calc_b_matrix(&self, adj_state:&HashMap<String,f64>, echo_idx:usize) -> BMat {
 
         // get view loop
         let mut vl = self.view_loop();
@@ -64,12 +64,25 @@ impl Dwi3DParams {
         let seq = vl.render_timeline(&adj_state).render();
 
         // time points where phase is inverted (center of rf180)
-        let t_inv:Vec<_> = vl.find_occurrences("rf180",50)
+        let mut t_inv:Vec<_> = vl.find_occurrences("rf180",50)
             .into_iter().map(|t|t.as_sec()).collect();
 
+        let t_inv_2:Vec<_> = vl.find_occurrences("rf180_2",50)
+            .into_iter().map(|t|t.as_sec()).collect();
+
+        t_inv.extend(t_inv_2);
+
+        println!("t_inv = {:?}", t_inv);
+
         // assumed echo time
-        let t_echo = vl.find_occurrences("acq",50)
-            .get(0).unwrap().as_sec();
+        // let t_echo = vl.find_occurrences("acq",50)
+        //     .get(0).unwrap().as_sec();
+
+        let t_echo = if echo_idx == 0 {
+            vl.find_occurrences("acq",50).get(0).unwrap().as_sec()
+        }else {
+            vl.find_occurrences("acq_2",50).get(echo_idx - 1).unwrap().as_sec()
+        };
 
         // performs numerical integration to calculate b-matrix
         calc_b_matrix(
@@ -114,6 +127,7 @@ impl Dwi3DParams {
         vl.set_time_span("rf90","diff1",100,0,del1).unwrap();
         vl.set_time_span("rf180","diff2",100,0,del2).unwrap();
         vl.set_min_time_span("diff2","pe",100,0,del3).unwrap();
+
         vl.set_time_span("pe","ru",100,0,Time::us(100)).unwrap();
         vl.set_time_span("ru","acq",100,0,Time::us(100)).unwrap();
         vl.set_min_time_span("acq","rd",100,0,Time::us(0)).unwrap();
@@ -124,8 +138,34 @@ impl Dwi3DParams {
             panic!("failed to set tau. You must lengthen the time between the inversion pulse and echo: {:?}",e);
         }
 
+
+
+
+        let mut el = SeqLoop::new("echo",3);
+        el.add_event(events.phase_enc_left).unwrap();
+        el.add_event(events.rf180_2).unwrap();
+        el.add_event(events.phase_enc_right).unwrap();
+        el.add_event(events.read_ru_2).unwrap();
+        el.add_event(events.acq_2).unwrap();
+        el.add_event(events.read_rd_2).unwrap();
+
+
+        el.set_time_span("pe_left","rf180_2",100,0, Time::us(100)).unwrap();
+        el.set_time_span("rf180_2","pe_right",200,0, Time::us(100)).unwrap();
+        el.set_time_span("pe_right","ru_2",100,0, Time::us(100)).unwrap();
+        el.set_time_span("ru_2","acq_2",100,0,Time::us(100)).unwrap();
+        el.set_min_time_span("acq_2","rd_2",100,0,Time::us(0)).unwrap();
+
+
+        let tau2 = el.get_time_span("rf180_2","acq_2",50,50).unwrap();
+
+        el.set_rep_time(tau2.scale(2)).unwrap();
+
         vl.set_pre_calc(Time::ms(2));
-        vl.set_rep_time(Time::ms(self.rep_time_ms)).unwrap();
+        vl.add_loop(el).unwrap();
+        vl.set_time_span("rd","pe_left",100,0,Time::us(100)).unwrap();
+
+        vl.set_rep_time(Time::ms(200)).unwrap();
 
         vl
     }
@@ -143,12 +183,14 @@ impl PulseSequence for Dwi3DParams {
         HashMap::from_iter(
             [
                 ("read_prephase".to_string(), 0.),
-                ("diff_x".to_string(), 1.0),
+                ("diff_x".to_string(), 0.0),
                 ("diff_y".to_string(), 0.0),
                 ("diff_z".to_string(), 0.0),
                 ("rf90_pow".to_string(), 0.0),
                 ("rf180_pow".to_string(), 0.0),
                 ("rf180_phase".to_string(), 0.0),
+                ("crush_left".to_string(), 0.0),
+                ("crush_right".to_string(), 0.0),
             ]
         )
     }
@@ -163,6 +205,14 @@ struct Events {
     read_ru: GradEvent,
     acq: ACQEvent,
     read_rd: GradEvent,
+
+    phase_enc_left: GradEvent,
+    rf180_2: RfEvent,
+    phase_enc_right: GradEvent,
+    read_ru_2: GradEvent,
+    acq_2: ACQEvent,
+    read_rd_2: GradEvent,
+
 }
 
 impl Events {
@@ -170,6 +220,7 @@ impl Events {
 
         let rf90 = RfEvent::new("rf90",&w.rf_90,&ec.c_rf90);
         let rf180 = RfEvent::new("rf180",&w.rf_180,&ec.c_rf180).with_phase(&ec.c_rf180_phase);
+        let rf180_2 = RfEvent::new("rf180_2",&w.rf_180,&ec.c_rf180).with_phase(&ec.c_rf180_phase);
 
         let diff1 = GradEvent::new("diff1")
             .with_x(&w.diffusion)
@@ -193,6 +244,27 @@ impl Events {
         let read_rd = GradEvent::new("rd").with_x(&w.ramp_down).with_strength_x(&ec.c_ro);
         let acq = ACQEvent::new("acq",params.n_x,Freq::hz(params.bw_hz).inv());
 
+
+        let read_ru_2 = GradEvent::new("ru_2").with_x(&w.ramp_up).with_strength_x(&ec.c_ro);
+        let read_rd_2 = GradEvent::new("rd_2").with_x(&w.ramp_down).with_strength_x(&ec.c_ro);
+        let acq_2 = ACQEvent::new("acq_2",params.n_x,Freq::hz(params.bw_hz).inv());
+
+        let phase_enc_left = GradEvent::new("pe_left")
+            .with_x(&w.phase_encode)
+            .with_y(&w.phase_encode)
+            .with_z(&w.phase_encode)
+            .with_strength_x(&ec.c_crush_left)
+            .with_strength_y(&ec.c_pe_ry)
+            .with_strength_z(&ec.c_pe_rz);
+
+        let phase_enc_right = GradEvent::new("pe_right")
+            .with_x(&w.phase_encode)
+            .with_y(&w.phase_encode)
+            .with_z(&w.phase_encode)
+            .with_strength_x(&ec.c_crush_right)
+            .with_strength_y(&ec.c_pe_y)
+            .with_strength_z(&ec.c_pe_z);
+
         Events {
             rf90,
             diff1,
@@ -202,6 +274,12 @@ impl Events {
             read_ru,
             acq,
             read_rd,
+            phase_enc_left,
+            rf180_2,
+            phase_enc_right,
+            read_ru_2,
+            acq_2,
+            read_rd_2,
         }
     }
 }
@@ -258,9 +336,16 @@ struct EventControllers {
     c_pe_x: Rc<EventControl<FieldGrad>>,
     c_pe_y: Rc<EventControl<FieldGrad>>,
     c_pe_z: Rc<EventControl<FieldGrad>>,
+
+    c_pe_ry: Rc<EventControl<FieldGrad>>,
+    c_pe_rz: Rc<EventControl<FieldGrad>>,
+
     c_rf90: Rc<EventControl<f64>>,
     c_rf180: Rc<EventControl<f64>>,
     c_rf180_phase: Rc<EventControl<Angle>>,
+
+    c_crush_left: Rc<EventControl<FieldGrad>>,
+    c_crush_right: Rc<EventControl<FieldGrad>>,
 }
 
 impl EventControllers {
@@ -309,27 +394,54 @@ impl EventControllers {
             .with_adj("read_prephase")
             .to_shared();
 
+
+        let pe_y_grad = FieldGrad::from_fov(
+            Length::mm(params.fov_y_mm),
+            pe_time,
+            Nuc1H,
+        );
+
         let c_pe_y = EventControl::<FieldGrad>::new().with_grad_scale(
-            FieldGrad::from_fov(
-                Length::mm(params.fov_y_mm),
-                pe_time,
-                Nuc1H,
-            )
+            pe_y_grad
         )
             .with_source_loop("view")
             .with_lut(&lut_pe_y)
             .to_shared();
 
+        let c_pe_ry = EventControl::<FieldGrad>::new().with_grad_scale(
+            pe_y_grad.scale(-1)
+        )
+            .with_source_loop("view")
+            .with_lut(&lut_pe_y)
+            .to_shared();
+
+        let pe_z_grad = FieldGrad::from_fov(
+            Length::mm(params.fov_z_mm),
+            pe_time,
+            Nuc1H,
+        );
+
         let c_pe_z = EventControl::<FieldGrad>::new().with_grad_scale(
-            FieldGrad::from_fov(
-                Length::mm(params.fov_z_mm),
-                pe_time,
-                Nuc1H,
-            )
+            pe_z_grad
         )
             .with_source_loop("view")
             .with_lut(&lut_pe_z)
             .to_shared();
+
+        let c_pe_rz = EventControl::<FieldGrad>::new().with_grad_scale(
+            pe_z_grad.scale(-1)
+        )
+            .with_source_loop("view")
+            .with_lut(&lut_pe_z)
+            .to_shared();
+
+        let c_crush_left = EventControl::<FieldGrad>::new()
+            .with_constant_grad(FieldGrad::mt_per_meter(100))
+            .with_adj("crush_left").to_shared();
+
+        let c_crush_right = EventControl::<FieldGrad>::new()
+            .with_constant_grad(FieldGrad::mt_per_meter(100))
+            .with_adj("crush_right").to_shared();
 
         //let c_diff_x = EventControl::<FieldGrad>::new().with_constant_grad(FieldGrad::mt_per_meter(2360)).with_adj("diff_x").to_shared();
         let c_diff_x = EventControl::<FieldGrad>::new().with_constant_grad(FieldGrad::mt_per_meter(0)).with_adj("diff_x").to_shared();
@@ -348,9 +460,13 @@ impl EventControllers {
             c_pe_x,
             c_pe_y,
             c_pe_z,
+            c_pe_ry,
+            c_pe_rz,
             c_rf90,
             c_rf180,
             c_rf180_phase,
+            c_crush_left,
+            c_crush_right,
         }
 
     }
