@@ -13,7 +13,7 @@ use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{Angle, FieldGrad, Freq, Length, Time};
 use mr_units::quantity::Unit;
 use seq_struct::acq_event::ACQEvent;
-use seq_struct::compile::Timeline;
+use seq_struct::compile::{Seq, Timeline};
 use seq_struct::grad_strength::EventControl;
 use seq_struct::gradient_event::GradEvent;
 use seq_struct::rf_event::RfEvent;
@@ -57,7 +57,7 @@ pub trait PulseSequence: Default {
     fn adjustment_state(&self) -> HashMap<String,f64>;
 
     /// render sequence timeline `[t,Gx,Gy,Gz,Bx,By,rec]` where t (sec), G (T/m), B (T), rec (rad)
-    fn render(&self,state:&HashMap<String,f64>) -> Vec<[f64;7]> {
+    fn render(&self,state:&HashMap<String,f64>) -> Seq {
         self.compile().render_timeline(state).render()
     }
 

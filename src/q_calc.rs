@@ -2,6 +2,7 @@
 
 use mr_units::constants::Nucleus;
 use mr_units::quantity::Unit;
+use nalgebra::{Matrix3, SymmetricEigen};
 
 /// calculate the phase accumulation q(t) from G(t) or G_eff(t) (T s m^-1)
 pub fn calc_phase(g:&[f64], t:&[f64], q:&mut [f64]) {
@@ -20,10 +21,63 @@ pub fn calc_b_factor(q_sq:&[f64], t:&[f64], t_end:f64, nuc:Nucleus) -> Option<f6
     )
 }
 
+#[derive(Debug)]
+/// B-Matrix to store b-factors calculated from a pulse sequence (s/mm^2)
+pub struct BMat {
+    pub bxx: f64,
+    pub byy: f64,
+    pub bzz: f64,
+    pub bxy: f64,
+    pub bxz: f64,
+    pub byz: f64,
+}
+
+impl BMat {
+    /// return the trace (b-value) of the matrix (s/mm^2)
+    pub fn trace(&self) -> f64 {
+        self.bxx + self.byy + self.bzz
+    }
+
+    /// returns the normalized b-vector using eigenvalue decomposition
+    pub fn b_vec(&self) -> [f64; 3] {
+        let b = Matrix3::new(
+            self.bxx, self.bxy, self.bxz,
+            self.bxy, self.byy, self.byz,
+            self.bxz, self.byz, self.bzz,
+        );
+
+        // Eigen-decomposition for symmetric matrix
+        let se = SymmetricEigen::new(b);
+
+        // Find index of the largest eigenvalue
+        let mut max_idx = 0usize;
+        let mut max_val = se.eigenvalues[0];
+        for i in 1..3 {
+            if se.eigenvalues[i] > max_val {
+                max_val = se.eigenvalues[i];
+                max_idx = i;
+            }
+        }
+
+        // Corresponding eigenvector is the encoding direction
+        let v = se.eigenvectors.column(max_idx).into_owned();
+
+        // Normalize to unit length
+        let n = v.norm();
+        if n > 0.0 {
+            let v = v / n;
+            [v.x, v.y, v.z]
+        } else {
+            [v.x, v.y, v.z]
+        }
+    }
+
+}
+
 /// calculates the b-matrix of some nucleus given Gx(t), Gy(t), Gz(t), and t_end. The order of the
 /// symmetric matrix elements are `[bxx,byy,bzz,bxy,bxz,byz]`. G(t) is assumes to have units T/m ,
 /// and time in seconds. The result is in standard s * mm^-2 units
-pub fn calc_b_matrix(gx:&[f64], gy:&[f64], gz:&[f64], t:&[f64], t_inv:&[f64], t_end:f64, nuc:Nucleus) -> [f64;6] {
+pub fn calc_b_matrix( t:&[f64], gx:&[f64], gy:&[f64], gz:&[f64], t_inv:&[f64], t_end:f64, nuc:Nucleus) -> BMat {
 
     let mut qx = vec![0.; gx.len()];
     let mut qy = vec![0.; gy.len()];
@@ -46,25 +100,31 @@ pub fn calc_b_matrix(gx:&[f64], gy:&[f64], gz:&[f64], t:&[f64], t_inv:&[f64], t_
     // cross term temp variable for re-use
     let mut tmp = vec![0.;qx.len()];
 
+    // x-diagonal (square term)
     tmp.iter_mut().zip(qx.iter()).for_each(|(t,&q)| *t = q * q);
     let bxx = calc_b_factor(&tmp,t,t_end,nuc).unwrap() * 1e-6;
 
+    // y-diagonal (square term)
     tmp.iter_mut().zip(qy.iter()).for_each(|(t,&q)| *t = q * q);
     let byy = calc_b_factor(&tmp,t,t_end,nuc).unwrap() * 1e-6;
 
+    // z-diagonal (square term)
     tmp.iter_mut().zip(qz.iter()).for_each(|(t,&q)| *t = q * q);
     let bzz = calc_b_factor(&tmp,t,t_end,nuc).unwrap() * 1e-6;
 
+    // xy cross term
     tmp.iter_mut().zip(qx.iter().zip(qy.iter())).for_each(|(t,(&x,&y))| *t = x * y);
     let bxy = calc_b_factor(&tmp,t,t_end,nuc).unwrap() * 1e-6;
 
+    // xz cross term
     tmp.iter_mut().zip(qx.iter().zip(qz.iter())).for_each(|(t,(&x,&z))| *t = x * z);
     let bxz = calc_b_factor(&tmp,t,t_end,nuc).unwrap() * 1e-6;
 
+    // yz cross term
     tmp.iter_mut().zip(qy.iter().zip(qz.iter())).for_each(|(t,(&y,&z))| *t = y * z);
     let byz = calc_b_factor(&tmp,t,t_end,nuc).unwrap() * 1e-6;
 
-    [bxx,byy,bzz,bxy,bxz,byz]
+    BMat { bxx, byy, bzz, bxy, bxz, byz }
 
 }
 
@@ -146,4 +206,71 @@ pub fn trapz(t: &[f64], x: &[f64]) -> f64 {
         sum += 0.5 * (x[i - 1] + x[i]) * dt;
     }
     sum
+}
+
+/// Binary solver (bisection method) for monotonic functions.
+/// Finds x in [low, high] such that f(x) ≈ target.
+///
+/// Assumptions:
+/// - f is continuous and monotonic on [low, high]
+/// - f(low) and f(high) bracket the target (i.e. (f(low)-target)*(f(high)-target) <= 0)
+pub fn binary_solve<F>(
+    mut low: f64,
+    mut high: f64,
+    target: f64,
+    tol: f64,
+    max_iter: usize,
+    mut f: F,
+) -> f64
+where
+    F: FnMut(f64) -> f64,
+{
+    // Optional: sanity check (can be removed for speed)
+    let f_low = f(low) - target;
+    let f_high = f(high) - target;
+
+    if f_low == 0.0 {
+        return low;
+    }
+    if f_high == 0.0 {
+        return high;
+    }
+
+    // If they don't bracket, you still *can* run,
+    // but bisection's guarantee goes away.
+    // Here we just continue, but you could panic! or return NaN.
+    if f_low * f_high > 0.0 {
+        eprintln!("Warning: binary_solve called with non-bracketing interval.");
+    }
+
+    let mut mid = 0.5 * (low + high);
+    for _ in 0..max_iter {
+        mid = 0.5 * (low + high);
+        let f_mid = f(mid);
+
+        // Stop if function value is close enough to target
+        if (f_mid - target).abs() <= tol {
+            return mid;
+        }
+
+        // Decide which half to keep, assuming monotonicity
+        if (f_mid - target) * f_low <= 0.0 {
+            // Root/target is between low and mid
+            high = mid;
+            // f_low stays the same
+        } else {
+            // Root/target is between mid and high
+            low = mid;
+            // update f_low so we keep correct sign info
+            // (you could also recompute f_low if needed)
+        }
+
+        // Stop if interval itself is tiny
+        if (high - low).abs() <= tol {
+            return 0.5 * (low + high);
+        }
+    }
+
+    // If we hit max_iter, return best current estimate
+    mid
 }

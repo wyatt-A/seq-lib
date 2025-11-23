@@ -15,7 +15,9 @@ use seq_struct::variable::LUT;
 use seq_struct::waveform::Waveform;
 use crate::grad_pulses::{ramp_down, ramp_up, trapezoid};
 use crate::PulseSequence;
+use crate::q_calc::{calc_b_matrix, BMat};
 use crate::rf_pulses::{hardpulse, hardpulse_composite, sinc3};
+
 
 pub struct Dwi3DParams {
     pub diffusion_ramp_time_us: u32,
@@ -55,6 +57,39 @@ impl Default for Dwi3DParams {
 
 impl Dwi3DParams {
 
+    pub fn calc_b_matrix(&self, adj_state:&HashMap<String,f64>) -> BMat {
+
+        // get view loop
+        let mut vl = self.view_loop();
+        // set iterations to 1 for a single view
+        vl.set_count(1);
+
+        let seq = vl.render_timeline(&adj_state).render();
+
+        // time points where phase is inverted (center of rf180)
+        let t_inv:Vec<_> = vl.find_occurrences("rf180",50)
+            .into_iter().map(|t|t.as_sec()).collect();
+
+        // assumed echo time
+        let t_echo = vl.find_occurrences("acq",50)
+            .get(0).unwrap().as_sec();
+
+        // performs numerical integration to calculate b-matrix
+        calc_b_matrix(
+                &seq.time_sec,
+                &seq.gx_tpm,
+                &seq.gy_tpm,
+                &seq.gz_tpm,
+                &t_inv,
+                t_echo,
+                Nuc1H,
+        )
+
+    }
+
+
+
+
     fn view_loop(&self) -> SeqLoop {
         let w = Waveforms::new(&self);
         let ec = EventControllers::new(&self);
@@ -73,14 +108,14 @@ impl Dwi3DParams {
 
         // time between end of rf90 and start of first diffusion pulse
         let del1 = Time::us(100);
-        let del2 = Time::us(100);
         // time between end of rf180 and start of second diffusion pulse
+        let del2 = Time::us(100);
+        // time after second diffusion before phase encoding. This should be chosen minimize effect
+        // of eddy currents
         let del3 = Time::ms(1);
 
-        // set time between end of excitation pulse and start of first diffusion pulse
         vl.set_time_span("rf90","diff1",100,0,del1).unwrap();
         vl.set_time_span("rf180","diff2",100,0,del2).unwrap();
-
         vl.set_min_time_span("diff2","pe",100,0,del3).unwrap();
         vl.set_time_span("pe","ru",100,0,Time::us(100)).unwrap();
         vl.set_time_span("ru","acq",100,0,Time::us(100)).unwrap();
@@ -111,7 +146,7 @@ impl PulseSequence for Dwi3DParams {
         HashMap::from_iter(
             [
                 ("read_prephase".to_string(), 0.),
-                ("diff_x".to_string(), 0.0),
+                ("diff_x".to_string(), 1.0),
                 ("diff_y".to_string(), 0.0),
                 ("diff_z".to_string(), 0.0),
                 ("rf90_pow".to_string(), 0.0),
