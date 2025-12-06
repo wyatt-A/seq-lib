@@ -4,7 +4,7 @@ use mr_units::quantity::Unit;
 use seq_lib::{dwi3d, ssme, PulseSequence};
 use seq_lib::dwi3d::Dwi3DParams;
 use seq_lib::q_calc::{binary_solve, calc_b_matrix, calc_g_effective};
-
+use seq_lib::rf_cal::RfCal;
 
 #[test]
 fn b_factor_example() {
@@ -12,6 +12,9 @@ fn b_factor_example() {
     // instantiate diffusion weighted pulse sequence
     let mut p = Dwi3DParams::default();
     let mut s = p.adjustment_state();
+
+    *s.get_mut("rf90_pow").unwrap() = 1.;
+    *s.get_mut("rf180_pow").unwrap() = 2.;
 
     let mut f = |grad_strength:f64| {
         *s.get_mut("diff_x").unwrap() = FieldGrad::mt_per_meter(grad_strength).si();
@@ -24,8 +27,15 @@ fn b_factor_example() {
     println!("g = {}",g);
     println!("bval = {}",f(g));
     // render out sequence to file
-    //p.render_to_file(&state,"out.ps");
+    p.render_to_file(&s,"out");
 
+}
+
+#[test]
+fn rf_cal_example() {
+    let rfc = RfCal::default();
+    let p = rfc.adjustment_state();
+    rfc.render_to_file(&p,"rf_cal");
 }
 
 

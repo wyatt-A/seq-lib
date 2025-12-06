@@ -5,6 +5,7 @@ pub mod se3d;
 pub mod ssme;
 pub mod dwi3d;
 pub mod q_calc;
+pub mod rf_cal;
 
 use std::collections::HashMap;
 use std::path::Path;

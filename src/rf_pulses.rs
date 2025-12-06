@@ -14,7 +14,7 @@ pub fn hardpulse(duration:Time, dt:Time, nucleus: Nucleus) -> RfPulse {
 
     let w = Waveform::new().add_list_r(&samples,dt).to_shared();
 
-    RfPulse::new(&w,2.,nucleus)
+    RfPulse::new(&w,1.,nucleus)
 }
 
 pub fn hardpulse_composite(duration:Time, dt:Time, nucleus: Nucleus) -> RfPulse {

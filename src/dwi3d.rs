@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::Read;
 use std::rc::Rc;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{Angle, FieldGrad, Freq, Length, Time};
@@ -17,7 +15,6 @@ use crate::grad_pulses::{ramp_down, ramp_up, trapezoid};
 use crate::PulseSequence;
 use crate::q_calc::{calc_b_matrix, BMat};
 use crate::rf_pulses::{hardpulse, hardpulse_composite, sinc3};
-
 
 pub struct Dwi3DParams {
     pub diffusion_ramp_time_us: u32,
