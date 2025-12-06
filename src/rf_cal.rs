@@ -152,11 +152,11 @@ impl Default for RfCal {
             rf_dir_us: 200,
             tau1_ms: 5.0,
             t_fill_ms: 5.0,
-            n_steps: 3,
+            n_steps: 100,
             ramp_time_us: 500,
             n_samples: 256,
             bandwidth_khz: 30.,
-            rep_time_ms: 1000.,
+            rep_time_ms: 100.,
         }
     }
 }

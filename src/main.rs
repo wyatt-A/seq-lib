@@ -18,7 +18,7 @@ fn b_factor_example() {
 
     let mut f = |grad_strength:f64| {
         *s.get_mut("diff_x").unwrap() = FieldGrad::mt_per_meter(grad_strength).si();
-        p.calc_b_matrix(&s).trace()
+        p.calc_b_matrix(&s,0).trace()
     };
 
     // find the x-gradient strength that produces target b-value
