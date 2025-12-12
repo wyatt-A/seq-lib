@@ -86,10 +86,7 @@ impl Dwi3DParams {
 
         // performs numerical integration to calculate b-matrix
         calc_b_matrix(
-                &seq.time_sec,
-                &seq.gx_tpm,
-                &seq.gy_tpm,
-                &seq.gz_tpm,
+                &seq,
                 &t_inv,
                 t_echo,
                 Nuc1H,

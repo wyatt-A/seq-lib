@@ -3,6 +3,7 @@
 use mr_units::constants::Nucleus;
 use mr_units::quantity::Unit;
 use nalgebra::{Matrix3, SymmetricEigen};
+use seq_struct::compile::Seq;
 
 /// calculate the phase accumulation q(t) from G(t) or G_eff(t) (T s m^-1)
 pub fn calc_phase(g:&[f64], t:&[f64], q:&mut [f64]) {
@@ -77,7 +78,12 @@ impl BMat {
 /// calculates the b-matrix of some nucleus given Gx(t), Gy(t), Gz(t), and t_end. The order of the
 /// symmetric matrix elements are `[bxx,byy,bzz,bxy,bxz,byz]`. G(t) is assumes to have units T/m ,
 /// and time in seconds. The result is in standard s * mm^-2 units
-pub fn calc_b_matrix( t:&[f64], gx:&[f64], gy:&[f64], gz:&[f64], t_inv:&[f64], t_end:f64, nuc:Nucleus) -> BMat {
+pub fn calc_b_matrix(s:&Seq, t_inv:&[f64], t_end:f64, nuc:Nucleus) -> BMat {
+
+    let t = &s.time_sec;
+    let gx = &s.gx_tpm;
+    let gy = &s.gy_tpm;
+    let gz = &s.gz_tpm;
 
     let mut qx = vec![0.; gx.len()];
     let mut qy = vec![0.; gy.len()];
