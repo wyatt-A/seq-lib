@@ -9,3 +9,6 @@ mr_units = {git = "ssh://git@github.com/wyatt-A/mr_units.git"}
 #seq_struct = {git = "ssh://git@github.com/wyatt-A/seq_struct.git"}
 seq_struct = {path = "../seq_struct"}
 nalgebra = "0.34.1"
+clap = { version = "4.5.53", features = ["derive"] }
+toml = "0.9.8"
+serde = { version = "1.0.228", features = ["derive"] }

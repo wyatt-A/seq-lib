@@ -1,5 +1,5 @@
-mod rf_pulses;
-mod grad_pulses;
+pub mod rf_pulses;
+pub mod grad_pulses;
 pub mod ring_down;
 pub mod se3d;
 pub mod ssme;
@@ -8,7 +8,8 @@ pub mod q_calc;
 pub mod rf_cal;
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use clap::{Args, Parser};
 pub use seq_struct;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{Angle, FieldGrad, Freq, Length, Time};
@@ -22,6 +23,21 @@ use seq_struct::rf_pulse::RfPulse;
 use seq_struct::seq_loop::SeqLoop;
 use seq_struct::waveform::Waveform;
 use crate::rf_pulses::{hardpulse, hardpulse_composite, sinc5};
+
+
+#[derive(Parser, Debug)]
+pub struct InputArgs {
+    /// Input pulse sequence parameters
+    pub input: PathBuf,
+
+    /// Output sequence file path
+    pub output: PathBuf,
+
+    /// Write default pulse sequence settings
+    #[arg(short, long)]
+    pub default: bool,
+}
+
 
 #[cfg(test)]
 mod tests {
