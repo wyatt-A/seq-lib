@@ -409,7 +409,7 @@ impl PulseSequence for DTIFse {
 
         vl.set_time_span(RE,REFT,100,0,Time::us(400)).unwrap();
         vl.set_pre_calc(Time::ms(3));
-        vl.set_rep_time(Time::ms(100)).unwrap();
+        vl.set_rep_time(Time::ms(60)).unwrap();
         vl
     }
 
@@ -466,7 +466,7 @@ fn main() {
         let w = s.render_timeline(&adj).render();
         calc_b_matrix(&w,&t_inv,t_echoes[0],Nuc1H).trace()
     };
-    let soltn = binary_solve(0.,2.,13_000.,1e-6,100,f);
+    let soltn = binary_solve(0.,2.5,13_000.,1e-6,100,f);
     println!("{:?}", soltn);
 
     *adj.get_mut("diff_x").unwrap() = soltn;
@@ -480,7 +480,7 @@ fn main() {
 
     //s.render_to_file(&adj,"fse_dti");
     let d = r"D:\dev\test\251214";
-    params.mode = Mode::Tune{n:10};
+    params.mode = Mode::Tune{n:1000};
     compile_seq(&params.compile(),d,"seq",true);
     build_seq(d);
 
