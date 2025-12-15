@@ -409,7 +409,7 @@ impl PulseSequence for DTIFse {
 
         vl.set_time_span(RE,REFT,100,0,Time::us(400)).unwrap();
         vl.set_pre_calc(Time::ms(3));
-        vl.set_rep_time(Time::ms(60)).unwrap();
+        vl.set_rep_time(Time::ms(100)).unwrap();
         vl
     }
 
@@ -478,10 +478,10 @@ fn main() {
         println!("{:?}",b)
     }
 
-    //s.render_to_file(&adj,"fse_dti");
-    let d = r"D:\dev\test\251214";
-    params.mode = Mode::Tune{n:1000};
-    compile_seq(&params.compile(),d,"seq",true);
-    build_seq(d);
+    params.mode = Mode::Tune{n:10};
+    params.render_to_file(&adj,"fse_dti");
+    //let d = r"D:\dev\test\251214";
+    //compile_seq(&params.compile(),d,"seq",true);
+    //build_seq(d);
 
 }
