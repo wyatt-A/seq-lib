@@ -91,7 +91,7 @@ impl Default for DTIFse {
             phase_enc_dur_ms: 0.7,
             big_delta_ms: 7.,
             little_delta_ms: 2.,
-            n_echoes: 4,
+            n_echoes: 6,
             cs_table: PathBuf::from("/path/to/table"),
             mode: Mode::Tune {n: 1_000},
         }
@@ -222,7 +222,8 @@ impl EventControllers {
                 // load cs table and set y and z steps
                 let mut y_steps = vec![];
                 let mut z_steps = vec![];
-                let mut f = File::open(r"C:\workstation\data\petableCS_stream\stream_CS256_8x_pa18_pb54").unwrap();
+                //let mut f = File::open(r"C:\workstation\data\petableCS_stream\stream_CS256_8x_pa18_pb54").unwrap();
+                let mut f = File::open("stream_CS256_8x_pa18_pb54").unwrap();
                 let mut entries = String::new();
                 f.read_to_string(&mut entries).unwrap();
                 let entries:Vec<i32> = entries.lines().map(|s| s.parse::<i32>().unwrap()).collect();
@@ -399,7 +400,7 @@ impl PulseSequence for DTIFse {
         vl.set_time_span(EXC,REF,100,0,tau).expect("failed to set delay");
 
         // echo loop events
-        let mut el = SeqLoop::new(ECHO,5);
+        let mut el = SeqLoop::new(ECHO,self.n_echoes - 1);
         el.add_event(events.refoct).unwrap();
         el.add_event(events.petl).unwrap();
         el.add_event(events.rot_ru).unwrap();
@@ -415,25 +416,24 @@ impl PulseSequence for DTIFse {
 
         let tau2 = el.get_time_span(REFT,ACQT,50,50).unwrap();
         let echo_spacing = tau2.scale(2);
-        println!("echo spacing: {} ms",echo_spacing.as_ms());
 
         el.set_pre_calc(Time::ms(1));
         el.set_rep_time(echo_spacing).expect("failed to set echo spacing");
         el.set_averages(0);
 
         vl.add_loop(el).unwrap();
-
         vl.set_time_span(RE,REFT,100,0,Time::us(400)).unwrap();
         vl.set_pre_calc(Time::ms(3));
         vl.set_rep_time(Time::ms(100)).unwrap();
+
         vl
     }
 
     fn adjustment_state(&self) -> HashMap<String, f64> {
         let mut state = HashMap::new();
-        state.insert("crush_left".to_string(),0.05);
+        state.insert("crush_left".to_string(), 0.05);
         state.insert("crush_right".to_string(), 0.07);
-        state.insert("prephase_x".to_string(),0.);
+        state.insert("prephase_x".to_string(), 0.);
         state.insert("rf90".to_string(), 1.);
         state.insert("rf180".to_string(), 2.);
         state.insert("diff_x".to_string(), 0.);
@@ -447,12 +447,13 @@ fn main() {
 
     // compile with default settings
     let mut params = DTIFse::default();
+
+    // mode for single rep through k0
     params.mode = Mode::Measure {r:0};
     let s = params.compile();
     let mut adj = params.adjustment_state();
 
-
-    // find where re
+    // find where inversion pulses occur to build q plot
     let mut t_inv = s.find_occurrences(REF,50);
     t_inv.extend(
         s.find_occurrences(REFT,50)
@@ -461,13 +462,10 @@ fn main() {
 
     // build list of echo times to evaluate each b-matrix
     let mut t_echoes = vec![];
-
     // get the center of the first echo from the center of ACQ
     t_echoes.push(
         s.find_occurrences(ACQ,50).get(0).unwrap().as_sec()
     );
-
-    // get the remaining echoes from the echo train
     let echo_train = s.find_occurrences(ACQT,50);
     for i in 0..(params.n_echoes-1) { // number of acqT
         t_echoes.push(
@@ -475,30 +473,44 @@ fn main() {
         )
     }
 
-    println!("echo times to evaluate: {:?}", t_echoes);
+    // print echo times
+    for (i,echo) in t_echoes.iter().enumerate() {
+        println!("echo {}: {} ms",i+1, echo * 1e3);
+    }
 
+    // define anonymous function to model the b-value as a function of the diffusion gradient along x-axis
     let f = |g| {
         *adj.get_mut("diff_x").unwrap() = g;
         let w = s.render_timeline(&adj).render();
         calc_b_matrix(&w,&t_inv,t_echoes[0],Nuc1H).trace()
     };
-    let soltn = binary_solve(0.,2.5,13_000.,1e-6,100,f);
-    println!("{:?}", soltn);
 
-    *adj.get_mut("diff_x").unwrap() = soltn;
+    let gmax = 2.5; // T/m
+    let bval = 13_000.; // s/mm^2
+    let tolerance = 1e-6; // s/mm^2
+    let max_iter = 100;
+    // solve for the input gradient strength to achieve desired b-value within the limits of the system
+    let grad_soltn = binary_solve(0.,gmax,bval,tolerance,max_iter,f);
+    println!("solved for gradient strength of {} mT/m", 1000. * grad_soltn);
+
+    // set the x-diffusion gradient to the solution
+    *adj.get_mut("diff_x").unwrap() = grad_soltn;
+    // re-render the timeline to model the b-factors
     let w = s.render_timeline(&adj).render();
     //evaluate b-matrix for each echo time and report the trace
-    for t in t_echoes {
+    for (i,&t) in t_echoes.iter().enumerate() {
         let bmat = calc_b_matrix(&w,&t_inv,t,Nuc1H);
         let b = bmat.trace();
-        println!("{:?}",b)
+        println!("echo {} bval: {}",i,b)
     }
 
     //params.mode = Mode::Tune{n:1000};
-    params.mode = Mode::Acq;
-    //params.render_to_file(&adj,"fse_dti");
-    let d = r"D:\dev\test\251216_02";
-    compile_seq(&params.compile(),d,"seq",false);
-    build_seq(d);
+    //params.mode = Mode::Acq;
+    params.mode = Mode::Tune {n:10};
+    println!("writing to file ...");
+    params.render_to_file(&adj,"fse_dti");
+    //let d = r"D:\dev\test\251216_02";
+    //compile_seq(&params.compile(),d,"seq",false);
+    //build_seq(d);
 
 }
