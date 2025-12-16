@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::Read;
 use std::path::PathBuf;
 use std::rc::Rc;
 use mr_units::constants::Nucleus::Nuc1H;
@@ -79,9 +81,9 @@ impl Default for DTIFse {
         DTIFse {
             bandwidth_khz: 100.,
             n_samples: 512,
-            fov_x_mm: 20.,
-            fov_y_mm: 12.,
-            fov_z_mm: 12.,
+            fov_x_mm: 25.6,
+            fov_y_mm: 12.8,
+            fov_z_mm: 12.8,
             rf_duration_us: 100,
             echo_spacing_ms: 4.,
             diffusion_ramp_time_us: 500,
@@ -218,7 +220,24 @@ impl EventControllers {
             }
             Mode::Acq => {
                 // load cs table and set y and z steps
-                todo!()
+                let mut y_steps = vec![];
+                let mut z_steps = vec![];
+                let mut f = File::open(r"C:\workstation\data\petableCS_stream\stream_CS256_8x_pa18_pb54").unwrap();
+                let mut entries = String::new();
+                f.read_to_string(&mut entries).unwrap();
+                let entries:Vec<i32> = entries.lines().map(|s| s.parse::<i32>().unwrap()).collect();
+                entries.chunks_exact(2).for_each(|coords| {
+                    y_steps.push(coords[0]);
+                    z_steps.push(coords[1]);
+                });
+                let lut_y = LUT::new("lut_y",&y_steps).to_shared();
+                let lut_z = LUT::new("lut_z",&z_steps).to_shared();
+                let phase_enc_y = EventControl::<FieldGrad>::new().with_source_loop(VIEW).with_lut(&lut_y).with_grad_scale(phase_step_y).to_shared();
+                let phase_enc_z = EventControl::<FieldGrad>::new().with_source_loop(VIEW).with_lut(&lut_z).with_grad_scale(phase_step_z).to_shared();
+                // inverse of the phase encodes
+                let phase_rewind_y = EventControl::<FieldGrad>::new().with_source_loop(VIEW).with_lut(&lut_y).with_grad_scale(phase_step_y.scale(-1)).to_shared();
+                let phase_rewind_z = EventControl::<FieldGrad>::new().with_source_loop(VIEW).with_lut(&lut_z).with_grad_scale(phase_step_z.scale(-1)).to_shared();
+                (phase_enc_y,phase_enc_z,phase_rewind_y,phase_rewind_z)
             },
             Mode::Tune{..} => {
                 let phase_enc_y = EventControl::<FieldGrad>::new().with_constant_grad(FieldGrad::mt_per_meter(0)).to_shared();
@@ -300,7 +319,7 @@ impl Events {
             .with_strength_x(&e.prephase_x).with_strength_y(&e.phase_enc_y).with_strength_z(&e.phase_enc_z);
 
         let re = GradEvent::new(RE).with_x(&w.phase_enc).with_y(&w.phase_enc).with_z(&w.phase_enc)
-            .with_strength_x(&e.crush_left_x).with_strength_y(&e.phase_rewind_y).with_strength_z(&e.phase_rewind_z);
+            .with_strength_x(&e.crush_right_x).with_strength_y(&e.phase_rewind_y).with_strength_z(&e.phase_rewind_z);
 
         let petl = GradEvent::new(PETL).with_x(&w.phase_enc).with_y(&w.phase_enc).with_z(&w.phase_enc)
             .with_strength_x(&e.crush_left_x).with_strength_y(&e.phase_enc_y).with_strength_z(&e.phase_enc_z);
@@ -345,14 +364,11 @@ impl PulseSequence for DTIFse {
         let events = Events::build(self,&w,&e);
 
         let n_views = match self.mode {
-            Mode::Measure { .. } => {
+            Mode::Measure { .. } | Mode::Acq => {
                 let ny = e.phase_enc_y.lut.as_ref().expect("expected phase_enc_y to contain a LUT").len();
                 let nz = e.phase_enc_z.lut.as_ref().expect("expected phase_enc_z to contain a LUT").len();
                 assert_eq!(ny,nz);
                 ny
-            }
-            Mode::Acq => {
-                todo!()
             }
             Mode::Tune {n} => {
                 n
@@ -478,10 +494,11 @@ fn main() {
         println!("{:?}",b)
     }
 
-    params.mode = Mode::Tune{n:10};
-    params.render_to_file(&adj,"fse_dti");
-    //let d = r"D:\dev\test\251214";
-    //compile_seq(&params.compile(),d,"seq",true);
-    //build_seq(d);
+    //params.mode = Mode::Tune{n:1000};
+    params.mode = Mode::Acq;
+    //params.render_to_file(&adj,"fse_dti");
+    let d = r"D:\dev\test\251216_02";
+    compile_seq(&params.compile(),d,"seq",false);
+    build_seq(d);
 
 }
