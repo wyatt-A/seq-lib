@@ -198,21 +198,32 @@ impl EventControllers {
                 )
             }
             Mode::Measure{grad_table: grad_tab,..} | Mode::Acq { grad_table: grad_tab } => {
-                //grad_tab[0][0].
-                let g_max = grad_tab.iter().flat_map(|s|s.map(|g|g.si())).max_by(|a,b|a.partial_cmp(&b).unwrap()).unwrap();
+
+                // determine g_max from the table
+                let g_max = grad_tab.iter()
+                    .map(|g| (g[0].si().powi(2) + g[1].si().powi(2) + g[2].si().powi(2)).sqrt())
+                    .max_by(|a,b|a.partial_cmp(&b).unwrap()).unwrap();
 
                 // discretize the diffusion gradient steps based on gmax
                 let grad_res = g_max / i16::MAX as f64; // grad strength per step
                 let scale = FieldGrad::tesla_per_meter(grad_res); // convert back to units of field grad from T/m
 
-                // builds lookup tables for diffusion gradient scaling (similar to spatial encoding)
+                // build lookup tables for diffusion gradient scaling (similar to spatial encoding)
                 let mut gx_lut = vec![];
                 let mut gy_lut = vec![];
                 let mut gz_lut = vec![];
                 for gvec in grad_tab {
-                    gx_lut.push((gvec[0].si() / grad_res).floor() as i32);
-                    gy_lut.push((gvec[1].si() / grad_res).floor() as i32);
-                    gz_lut.push((gvec[2].si() / grad_res).floor() as i32);
+
+                    let step_x = (gvec[0].si() / grad_res).floor() as i32;
+                    let step_y = (gvec[1].si() / grad_res).floor() as i32;
+                    let step_z = (gvec[2].si() / grad_res).floor() as i32;
+
+                    //let m = step_x.pow(2) + step_y.pow(2) + step_z.pow(2);
+                    //println!("[{},{},{},{}]",step_x,step_y,step_z,(m as f64).sqrt());
+
+                    gx_lut.push(step_x);
+                    gy_lut.push(step_y);
+                    gz_lut.push(step_z);
                 }
 
                 let gx_lut = LUT::new("diff_gx",&gx_lut).to_shared();
@@ -259,8 +270,8 @@ impl EventControllers {
                 // load cs table and set y and z steps
                 let mut y_steps = vec![];
                 let mut z_steps = vec![];
-                //let mut f = File::open(r"C:\workstation\data\petableCS_stream\stream_CS256_8x_pa18_pb54").unwrap();
-                let mut f = File::open("stream_CS256_8x_pa18_pb54").unwrap();
+                let mut f = File::open(r"C:\workstation\data\petableCS_stream\stream_CS256_8x_pa18_pb54").unwrap();
+                //let mut f = File::open("stream_CS256_8x_pa18_pb54").unwrap();
                 let mut entries = String::new();
                 f.read_to_string(&mut entries).unwrap();
                 let entries:Vec<i32> = entries.lines().map(|s| s.parse::<i32>().unwrap()).collect();
@@ -536,7 +547,7 @@ fn main() {
     };
 
     let gmax = 2.5; // T/m
-    let bval = 3_000.; // s/mm^2
+    let bval = 8_000.; // s/mm^2
     let tolerance = 1e-6; // s/mm^2
     let max_iter = 100;
     // solve for the input gradient strength to achieve desired b-value within the limits of the system
@@ -544,7 +555,7 @@ fn main() {
     println!("solved for gradient strength of {} mT/m", 1000. * grad_soltn);
 
     // load b-vec table
-    let (shell_idx,bvecs) = load_bvecs("/Users/Wyatt/26.wang.06/bvecs.txt");
+    let (shell_idx,bvecs) = load_bvecs(r"C:\workstation\data\diffusion_table\26.wang.06\bvecs.txt");
     let grad_tab:Vec<_> = bvecs.iter().map(|bv|{
         [
             FieldGrad::tesla_per_meter(grad_soltn).scale(bv[0]),
@@ -561,22 +572,20 @@ fn main() {
     for (i,&t) in t_echoes.iter().enumerate() {
         let bmat = calc_b_matrix(&w,&t_inv,t,Nuc1H);
         let b = bmat.trace();
-        println!("echo {} bval: {}",i,b)
+        println!("echo {} bval: {}",i+1,b)
     }
-
-
 
     //params.mode = Mode::Tune{n:1000};
     //params.mode = Mode::Acq;
 
-    params.mode = Mode::Acq { grad_table: grad_tab};
-    //params.mode = Mode::Tune {n:10};
+    //params.mode = Mode::Acq { grad_table: grad_tab};
+    params.mode = Mode::Measure {r:2, grad_table: grad_tab};
+    //params.mode = Mode::Tune {n:10_000};
     //println!("writing to file ...");
     //params.render_to_file(&adj,"fse_dti");
-    //let d = r"D:\dev\test\251216_02";
-    let d = r"test_out";
+    let d = r"D:\dev\test\251217_03\b8k";
     compile_seq(&params.compile(),d,"seq",false);
-    //build_seq(d);
+    build_seq(d);
 
 }
 
