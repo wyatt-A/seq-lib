@@ -547,7 +547,7 @@ fn main() {
     };
 
     let gmax = 2.5; // T/m
-    let bval = 8_000.; // s/mm^2
+    let bval = 7.; // s/mm^2
     let tolerance = 1e-6; // s/mm^2
     let max_iter = 100;
     // solve for the input gradient strength to achieve desired b-value within the limits of the system
@@ -583,7 +583,7 @@ fn main() {
     //params.mode = Mode::Tune {n:10_000};
     //println!("writing to file ...");
     //params.render_to_file(&adj,"fse_dti");
-    let d = r"D:\dev\test\251217_03\b8k";
+    let d = r"D:\dev\test\251217_03\b0";
     compile_seq(&params.compile(),d,"seq",false);
     build_seq(d);
 
