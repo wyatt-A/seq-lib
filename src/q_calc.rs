@@ -1,9 +1,67 @@
 // calculate q-space space values based on G and inversion pulses
 
 use mr_units::constants::Nucleus;
+use mr_units::constants::Nucleus::Nuc1H;
+use mr_units::primitive::{FieldGrad, Time};
 use mr_units::quantity::Unit;
 use nalgebra::{Matrix3, SymmetricEigen};
 use seq_struct::compile::Seq;
+use seq_struct::seq_loop::SeqLoop;
+use crate::PulseSequence;
+
+pub fn grad_solve<P:PulseSequence>(p:&P, adj_var:&str, target_bval:f64, g_lower:FieldGrad, g_upper:FieldGrad, inv_pulses_labels:&[&str], echo_time:Time) -> FieldGrad {
+
+    let mut adj_state = p.adjustment_state();
+    let s = p.compile();
+
+    // get the center point of each inversion pulse
+    let mut inv_pulse_times:Vec<_> = inv_pulses_labels.iter().flat_map(|inv_pulse|{
+        s.find_occurrences(inv_pulse,50).into_iter().map(|t|t.as_sec())
+    }).collect();
+    inv_pulse_times.sort_by(|a,b|a.si().partial_cmp(&b.si()).unwrap());
+
+    let mut f = |g| {
+        *adj_state.get_mut(adj_var).unwrap() = g;
+        let w = s.render_timeline(&adj_state).render();
+        calc_b_matrix(&w,&inv_pulse_times,echo_time.as_sec(), Nuc1H).trace()
+    };
+
+    let b = f(g_lower.si());
+    if b > target_bval {
+        println!("min b-value for min gradient strength is {b} s/mm^2 bval");
+        g_lower
+    }else if f(g_upper.si()) < target_bval {
+        println!("unable to achieve target b-value {target_bval} s/mm^2 with max gradient strength {} T/m",g_upper.si());
+        panic!("unable to achieve target b-value")
+    }else {
+        let tolerance = 1e-6;
+        let max_iter = 100;
+        let grad_soltn = binary_solve(g_lower.si(),g_upper.si(),target_bval,tolerance,max_iter,f);
+        //println!("solved for gradient strength of {} mT/m", 1000. * grad_soltn);
+        FieldGrad::tesla_per_meter(grad_soltn)
+    }
+
+}
+
+//    // define anonymous function to model the b-value as a function of the diffusion gradient along x-axis
+//     let f = |g| {
+//         *adj.get_mut("diff_x").unwrap() = g;
+//         let w = s.render_timeline(&adj).render();
+//         calc_b_matrix(&w,&t_inv,t_echoes[0],Nuc1H).trace()
+//     };
+//
+//     let gmax = 2.5; // T/m
+//     let bval = 7.; // s/mm^2
+//     let tolerance = 1e-6; // s/mm^2
+//     let max_iter = 100;
+//     // solve for the input gradient strength to achieve desired b-value within the limits of the system
+//     let grad_soltn = binary_solve(0.,gmax,bval,tolerance,max_iter,f);
+//     println!("solved for gradient strength of {} mT/m", 1000. * grad_soltn);
+
+
+
+
+
 
 /// calculate the phase accumulation q(t) from G(t) or G_eff(t) (T s m^-1)
 pub fn calc_phase(g:&[f64], t:&[f64], q:&mut [f64]) {

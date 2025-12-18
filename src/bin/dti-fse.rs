@@ -18,7 +18,7 @@ use seq_lib::grad_pulses::{ramp_down, ramp_up, trapezoid};
 use seq_lib::PulseSequence;
 use seq_lib::rf_pulses::{hardpulse, hardpulse_composite};
 use mrs_ppl::compile::{build_seq, compile_seq};
-use seq_lib::q_calc::{binary_solve, calc_b_matrix};
+use seq_lib::q_calc::{binary_solve, calc_b_matrix, grad_solve};
 
 // shorthand types
 type GW = Rc<Waveform>;
@@ -539,33 +539,40 @@ fn main() {
         println!("echo {}: {} ms",i+1, echo * 1e3);
     }
 
-    // define anonymous function to model the b-value as a function of the diffusion gradient along x-axis
-    let f = |g| {
-        *adj.get_mut("diff_x").unwrap() = g;
-        let w = s.render_timeline(&adj).render();
-        calc_b_matrix(&w,&t_inv,t_echoes[0],Nuc1H).trace()
-    };
+    let target_bals = [1_000.,3_000.,5_000.,8_000.,10_000.,12_000.];
 
-    let gmax = 2.5; // T/m
-    let bval = 7.; // s/mm^2
-    let tolerance = 1e-6; // s/mm^2
-    let max_iter = 100;
-    // solve for the input gradient strength to achieve desired b-value within the limits of the system
-    let grad_soltn = binary_solve(0.,gmax,bval,tolerance,max_iter,f);
-    println!("solved for gradient strength of {} mT/m", 1000. * grad_soltn);
+    let grad_soltns:Vec<_> = target_bals.iter().map(|&target_bval|{
+        grad_solve(
+            &params,
+            "diff_x",
+            target_bval,
+            FieldGrad::tesla_per_meter(0), // lower limit
+            FieldGrad::tesla_per_meter(2), // upper limit
+            &[REF,REFT],
+            Time::sec(t_echoes[0])
+        )
+    }).collect();
+
+    for (soltn,target_bval) in grad_soltns.iter().zip(&target_bals) {
+        println!("solved for gradient strength of {} mT/m for target b-value {target_bval} s/mm^2", 1000. * soltn.si());
+    }
 
     // load b-vec table
-    let (shell_idx,bvecs) = load_bvecs(r"C:\workstation\data\diffusion_table\26.wang.06\bvecs.txt");
-    let grad_tab:Vec<_> = bvecs.iter().map(|bv|{
+    //let (shell_idx,bvecs) = load_bvecs(r"C:\workstation\data\diffusion_table\26.wang.06\bvecs.txt");
+    let (shell_idx,bvecs) = load_bvecs(r"../26.wang.06/bvecs.txt");
+    let n_shells = *shell_idx.iter().max().unwrap() + 1;
+    assert_eq!(n_shells,target_bals.len(),"expect {} target b-vals based on max shell index",n_shells);
+    let grad_tab:Vec<_> = bvecs.iter().zip(shell_idx).map(|(bv,s_idx)|{
         [
-            FieldGrad::tesla_per_meter(grad_soltn).scale(bv[0]),
-            FieldGrad::tesla_per_meter(grad_soltn).scale(bv[1]),
-            FieldGrad::tesla_per_meter(grad_soltn).scale(bv[2])
+            grad_soltns[s_idx].scale(bv[0]),
+            grad_soltns[s_idx].scale(bv[1]),
+            grad_soltns[s_idx].scale(bv[2])
         ]
     }).collect();
 
+
     // set the x-diffusion gradient to the solution
-    *adj.get_mut("diff_x").unwrap() = grad_soltn;
+    *adj.get_mut("diff_x").unwrap() = grad_soltns[0].si();
     // re-render the timeline to model the b-factors
     let w = s.render_timeline(&adj).render();
     //evaluate b-matrix for each echo time and report the trace
@@ -579,13 +586,14 @@ fn main() {
     //params.mode = Mode::Acq;
 
     //params.mode = Mode::Acq { grad_table: grad_tab};
-    params.mode = Mode::Measure {r:2, grad_table: grad_tab};
+    params.mode = Mode::Measure {r:3, grad_table: grad_tab};
     //params.mode = Mode::Tune {n:10_000};
     //println!("writing to file ...");
     //params.render_to_file(&adj,"fse_dti");
-    let d = r"D:\dev\test\251217_03\b0";
+    //let d = r"D:\dev\test\251217_03\b0";
+    let d = r"/Users/wyatt/seq-lib";
     compile_seq(&params.compile(),d,"seq",false);
-    build_seq(d);
+    //build_seq(d);
 
 }
 

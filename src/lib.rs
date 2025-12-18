@@ -73,6 +73,10 @@ pub trait PulseSequence: Default {
     fn compile(&self) -> SeqLoop;
     fn adjustment_state(&self) -> HashMap<String,f64>;
 
+    fn render_timeline(&self,state:&HashMap<String,f64>) -> Timeline {
+        self.compile().render_timeline(state)
+    }
+
     /// render sequence timeline `[t,Gx,Gy,Gz,Bx,By,rec]` where t (sec), G (T/m), B (T), rec (rad)
     fn render(&self,state:&HashMap<String,f64>) -> Seq {
         self.compile().render_timeline(state).render()
