@@ -1,5 +1,9 @@
 // calculate q-space space values based on G and inversion pulses
 
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
 use mr_units::constants::Nucleus;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{FieldGrad, Time};
@@ -8,6 +12,20 @@ use nalgebra::{Matrix3, SymmetricEigen};
 use seq_struct::compile::Seq;
 use seq_struct::seq_loop::SeqLoop;
 use crate::PulseSequence;
+
+/// loads b-vec file with format (shell_idx, ux, uy, uz)
+pub fn load_bvecs(file:impl AsRef<Path>) -> (Vec<usize>,Vec<[f64;3]>) {
+    let mut f = File::open(file.as_ref()).unwrap();
+    let mut s = String::new();
+    f.read_to_string(&mut s).unwrap();
+    let mut shell_idx = vec![];
+    let bvecs:Vec<_> = s.lines().skip(1).map(|line| {
+        let line_entries:Vec<_> = line.split_ascii_whitespace().map(|s|s.trim().parse::<f64>().unwrap()).collect();
+        shell_idx.push(line_entries[0] as usize);
+        [line_entries[1],line_entries[2],line_entries[3]]
+    }).collect();
+    (shell_idx,bvecs)
+}
 
 pub fn grad_solve<P:PulseSequence>(p:&P, adj_var:&str, target_bval:f64, g_lower:FieldGrad, g_upper:FieldGrad, inv_pulses_labels:&[&str], echo_time:Time) -> FieldGrad {
 
@@ -23,7 +41,7 @@ pub fn grad_solve<P:PulseSequence>(p:&P, adj_var:&str, target_bval:f64, g_lower:
     let mut f = |g| {
         *adj_state.get_mut(adj_var).unwrap() = g;
         let w = s.render_timeline(&adj_state).render();
-        calc_b_matrix(&w,&inv_pulse_times,echo_time.as_sec(), Nuc1H).trace()
+        _calc_b_matrix(&w,&inv_pulse_times,echo_time.as_sec(), Nuc1H).trace()
     };
 
     let b = f(g_lower.si());
@@ -41,6 +59,17 @@ pub fn grad_solve<P:PulseSequence>(p:&P, adj_var:&str, target_bval:f64, g_lower:
         FieldGrad::tesla_per_meter(grad_soltn)
     }
 
+}
+
+pub fn calc_b_matrix<P:PulseSequence>(p:&P, adj_state:&HashMap<String,f64>, inv_pulses_labels:&[&str], echo_time:Time, nucleus: Nucleus) -> BMat {
+    let s = p.compile();
+    // get the center point of each inversion pulse
+    let mut inv_pulse_times:Vec<_> = inv_pulses_labels.iter().flat_map(|inv_pulse|{
+        s.find_occurrences(inv_pulse,50).into_iter().map(|t|t.as_sec())
+    }).collect();
+    inv_pulse_times.sort_by(|a,b|a.si().partial_cmp(&b.si()).unwrap());
+    let seq = s.render_timeline(adj_state).render();
+    _calc_b_matrix(&seq,&inv_pulse_times,echo_time.as_sec(), nucleus)
 }
 
 //    // define anonymous function to model the b-value as a function of the diffusion gradient along x-axis
@@ -136,7 +165,7 @@ impl BMat {
 /// calculates the b-matrix of some nucleus given Gx(t), Gy(t), Gz(t), and t_end. The order of the
 /// symmetric matrix elements are `[bxx,byy,bzz,bxy,bxz,byz]`. G(t) is assumes to have units T/m ,
 /// and time in seconds. The result is in standard s * mm^-2 units
-pub fn calc_b_matrix(s:&Seq, t_inv:&[f64], t_end:f64, nuc:Nucleus) -> BMat {
+fn _calc_b_matrix(s:&Seq, t_inv:&[f64], t_end:f64, nuc:Nucleus) -> BMat {
 
     let t = &s.time_sec;
     let gx = &s.gx_tpm;

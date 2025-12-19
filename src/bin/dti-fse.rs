@@ -1,6 +1,8 @@
+use std::arch::naked_asm;
+use std::io::Write;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use mr_units::constants::Nucleus::Nuc1H;
@@ -18,7 +20,7 @@ use seq_lib::grad_pulses::{ramp_down, ramp_up, trapezoid};
 use seq_lib::PulseSequence;
 use seq_lib::rf_pulses::{hardpulse, hardpulse_composite};
 use mrs_ppl::compile::{build_seq, compile_seq};
-use seq_lib::q_calc::{binary_solve, calc_b_matrix, grad_solve};
+use seq_lib::q_calc::{binary_solve, calc_b_matrix, grad_solve, load_bvecs};
 
 // shorthand types
 type GW = Rc<Waveform>;
@@ -59,21 +61,22 @@ const PETR: &str = "pet_right";
 
 
 struct DTIFse {
+    mode: Mode,
     bandwidth_khz: f64,
     n_samples: usize,
     fov_x_mm: f64,
     fov_y_mm: f64,
     fov_z_mm: f64,
     rf_duration_us: usize,
-    echo_spacing_ms: f64,
     diffusion_ramp_time_us: usize,
     imaging_ramp_time_us: usize,
     phase_enc_dur_ms: f64,
-    big_delta_ms: f64,
     little_delta_ms: f64,
+    g_limit_tpm: f64,
     n_echoes: usize,
     cs_table: PathBuf,
-    mode: Mode,
+    bvec_table: PathBuf,
+    target_bvalues: Vec<f64>,
 }
 
 impl Default for DTIFse {
@@ -85,14 +88,15 @@ impl Default for DTIFse {
             fov_y_mm: 12.8,
             fov_z_mm: 12.8,
             rf_duration_us: 100,
-            echo_spacing_ms: 4.,
             diffusion_ramp_time_us: 500,
             imaging_ramp_time_us: 200,
-            phase_enc_dur_ms: 0.7,
-            big_delta_ms: 7.,
-            little_delta_ms: 2.,
+            phase_enc_dur_ms: 0.5,
+            little_delta_ms: 1.7,
+            g_limit_tpm: 2.3,
             n_echoes: 6,
-            cs_table: PathBuf::from("/path/to/table"),
+            cs_table: PathBuf::from(r"stream_CS256_8x_pa18_pb54"),
+            bvec_table: PathBuf::from(r"../26.wang.06/bvecs.txt"),
+            target_bvalues: vec![1_000.,3_000.,5_000.,8_000.,10_000.,12_000.],
             mode: Mode::Tune {n: 1_000},
         }
     }
@@ -105,9 +109,7 @@ struct Waveforms {
     phase_enc: GW,
     rf90: RF,
     rf180: RF,
-
     imaging_ramp_time:Time,
-    diffusion_pulse_plat_dur:Time,
     pe_dur:Time,
     rf_dur:Time,
 }
@@ -147,7 +149,6 @@ impl Waveforms {
             rf90,
             rf180,
             imaging_ramp_time,
-            diffusion_pulse_plat_dur,
             pe_dur,
             rf_dur,
         }
@@ -167,6 +168,12 @@ struct EventControllers {
     phase_enc_z: GS,
     phase_rewind_y: GS,
     phase_rewind_z: GS,
+
+    // phase_enc2_y: GS,
+    // phase_enc2_z: GS,
+    // phase_rewind2_y: GS,
+    // phase_rewind2_z: GS,
+
     prephase_x: GS,
     crush_left_x: GS,
     crush_right_x: GS,
@@ -174,8 +181,14 @@ struct EventControllers {
 
 #[derive(Clone)]
 enum Mode {
-    Measure{r:i32, grad_table: Vec<[FieldGrad;3]>}, // phase step radius to measure
-    Acq{ grad_table: Vec<[FieldGrad;3]>},
+    /// used to acquire image support region for each echo to measure phase errors.
+    /// The y-z FOV should match the size of the object to gather accurate phase information due to very low matrix size in y-z
+    /// "r" is the y-z sampling radius e.g. r=2 results in 25 phase encodes total (2r + 1)^2
+    Measure{r:i32, fov_y:f64, fov_z:f64, n_dummies:usize, g_vectors: Vec<[FieldGrad;3]>},
+    /// used to acquire the data set
+    Acq{ n_dummies:usize, g_vectors: Vec<[FieldGrad;3]>},
+    /// used to tune the sequence parameters (Rf power and crushers/balancers) where n is the number
+    /// of reps
     Tune{n:usize},
 }
 
@@ -184,12 +197,12 @@ impl EventControllers {
 
         let dwell_time = Freq::khz(params.bandwidth_khz).inv();
         let acq_time = dwell_time.scale(params.n_samples);
-
         let gro = FieldGrad::from_fov(Length::mm(params.fov_x_mm), dwell_time, Nuc1H);
-
         let readout = EventControl::<FieldGrad>::new().with_constant_grad(gro).to_shared();
 
+        // build the diffusion event controllers based on the pulse sequence mode
         let (diffusion_x,diffusion_y,diffusion_z) = match &params.mode {
+            // "tune" offers full adjustable control of each diffusion gradient
             Mode::Tune{..} => {
                 (
                     EventControl::<FieldGrad>::new().with_adj("diff_x").to_shared(),
@@ -197,60 +210,57 @@ impl EventControllers {
                     EventControl::<FieldGrad>::new().with_adj("diff_z").to_shared()
                 )
             }
-            Mode::Measure{grad_table: grad_tab,..} | Mode::Acq { grad_table: grad_tab } => {
+            // "measure" and "acq" use a pre-determined gradient table to control gradient strengths
+            Mode::Measure{ g_vectors, .. } | Mode::Acq { g_vectors, .. } => {
 
                 // determine g_max from the table
-                let g_max = grad_tab.iter()
+                let g_max = g_vectors.iter()
                     .map(|g| (g[0].si().powi(2) + g[1].si().powi(2) + g[2].si().powi(2)).sqrt())
                     .max_by(|a,b|a.partial_cmp(&b).unwrap()).unwrap();
 
-                // discretize the diffusion gradient steps based on gmax
-                let grad_res = g_max / i16::MAX as f64; // grad strength per step
-                let scale = FieldGrad::tesla_per_meter(grad_res); // convert back to units of field grad from T/m
+                // discretize the diffusion gradient steps based on g_max
+                let diff_grad_resolution = FieldGrad::tesla_per_meter(g_max / i16::MAX as f64); // grad strength per step
 
                 // build lookup tables for diffusion gradient scaling (similar to spatial encoding)
                 let mut gx_lut = vec![];
                 let mut gy_lut = vec![];
                 let mut gz_lut = vec![];
-                for gvec in grad_tab {
-
-                    let step_x = (gvec[0].si() / grad_res).floor() as i32;
-                    let step_y = (gvec[1].si() / grad_res).floor() as i32;
-                    let step_z = (gvec[2].si() / grad_res).floor() as i32;
-
-                    //let m = step_x.pow(2) + step_y.pow(2) + step_z.pow(2);
-                    //println!("[{},{},{},{}]",step_x,step_y,step_z,(m as f64).sqrt());
-
+                for g_vec in g_vectors {
+                    let step_x = (g_vec[0].si() / diff_grad_resolution.si()).floor() as i32;
+                    let step_y = (g_vec[1].si() / diff_grad_resolution.si()).floor() as i32;
+                    let step_z = (g_vec[2].si() / diff_grad_resolution.si()).floor() as i32;
                     gx_lut.push(step_x);
                     gy_lut.push(step_y);
                     gz_lut.push(step_z);
                 }
-
                 let gx_lut = LUT::new("diff_gx",&gx_lut).to_shared();
                 let gy_lut = LUT::new("diff_gy",&gy_lut).to_shared();
                 let gz_lut = LUT::new("diff_gz",&gz_lut).to_shared();
-
                 (
-                    EventControl::<FieldGrad>::new().with_source_loop(EXPERIMENT).with_lut(&gx_lut).with_grad_scale(scale).to_shared(),
-                    EventControl::<FieldGrad>::new().with_source_loop(EXPERIMENT).with_lut(&gy_lut).with_grad_scale(scale).to_shared(),
-                    EventControl::<FieldGrad>::new().with_source_loop(EXPERIMENT).with_lut(&gz_lut).with_grad_scale(scale).to_shared(),
+                    EventControl::<FieldGrad>::new().with_source_loop(EXPERIMENT)
+                        .with_lut(&gx_lut).with_grad_scale(diff_grad_resolution).to_shared(),
+                    EventControl::<FieldGrad>::new().with_source_loop(EXPERIMENT)
+                        .with_lut(&gy_lut).with_grad_scale(diff_grad_resolution).to_shared(),
+                    EventControl::<FieldGrad>::new().with_source_loop(EXPERIMENT)
+                        .with_lut(&gz_lut).with_grad_scale(diff_grad_resolution).to_shared(),
                 )
-
             }
         };
-
-
 
         let pe_time = Time::try_from(w.imaging_ramp_time + w.pe_dur).unwrap();
         let ro_time = Time::try_from(w.imaging_ramp_time + acq_time).unwrap();
 
-        let phase_step_y = FieldGrad::from_fov(Length::mm(params.fov_y_mm), pe_time, Nuc1H);
-        let phase_step_z = FieldGrad::from_fov(Length::mm(params.fov_z_mm), pe_time, Nuc1H);
-
         let (phase_enc_y,phase_enc_z,phase_rewind_y,phase_rewind_z) = match params.mode {
-            Mode::Measure{r,..} => {
-                let mut y_steps = vec![];
-                let mut z_steps = vec![];
+            Mode::Measure{r,fov_y,fov_z,n_dummies,..} => {
+
+                let phase_step_y = FieldGrad::from_fov(Length::mm(fov_y), pe_time, Nuc1H);
+                let phase_step_z = FieldGrad::from_fov(Length::mm(fov_z), pe_time, Nuc1H);
+
+                // populate with dummy scans
+                let mut y_steps = vec![0;n_dummies];
+                let mut z_steps = vec![0;n_dummies];
+
+                // populate with steps from -r to r
                 for y in -r..=r {
                     for z in -r..=r {
                         y_steps.push(y);
@@ -266,16 +276,30 @@ impl EventControllers {
                 let phase_rewind_z = EventControl::<FieldGrad>::new().with_source_loop(VIEW).with_lut(&lut_z).with_grad_scale(phase_step_z.scale(-1)).to_shared();
                 (phase_enc_y,phase_enc_z,phase_rewind_y,phase_rewind_z)
             }
-            Mode::Acq{..} => {
-                // load cs table and set y and z steps
-                let mut y_steps = vec![];
-                let mut z_steps = vec![];
-                let mut f = File::open(r"C:\workstation\data\petableCS_stream\stream_CS256_8x_pa18_pb54").unwrap();
-                //let mut f = File::open("stream_CS256_8x_pa18_pb54").unwrap();
+            Mode::Acq{n_dummies, ..} => {
+
+                let phase_step_y = FieldGrad::from_fov(Length::mm(params.fov_y_mm), pe_time, Nuc1H);
+                let phase_step_z = FieldGrad::from_fov(Length::mm(params.fov_z_mm), pe_time, Nuc1H);
+
+                // populate with dummy scans
+                let mut y_steps = vec![0;n_dummies];
+                let mut z_steps = vec![0;n_dummies];
+
+                // load steps from CS table
+                let mut f = File::open(&params.cs_table).unwrap();
                 let mut entries = String::new();
                 f.read_to_string(&mut entries).unwrap();
                 let entries:Vec<i32> = entries.lines().map(|s| s.parse::<i32>().unwrap()).collect();
-                entries.chunks_exact(2).for_each(|coords| {
+
+                let mut pairs:Vec<_> = entries.chunks_exact(2).map(|coord| {
+                    let r:i32 = coord.iter().map(|x|x * x).sum();
+                    (coord,r)
+                } ).collect();
+
+                // coordinate pairs sorted from least to greatest in terms of |k|
+                pairs.sort_by_key(|(_,r)|*r);
+                let pairs:Vec<_> = pairs.into_iter().map(|(c,_)| c).collect();
+                pairs.iter().for_each(|coords| {
                     y_steps.push(coords[0]);
                     z_steps.push(coords[1]);
                 });
@@ -297,16 +321,11 @@ impl EventControllers {
             }
         };
 
-
-
         let pe_ro_ratio = (ro_time / pe_time).si();
         let gp = gro.scale( - pe_ro_ratio / 2.);
-
         let prephase_x = EventControl::<FieldGrad>::new().with_constant_grad(gp).with_adj("prephase_x").to_shared();
-
         let crush_left_x = EventControl::<FieldGrad>::new().with_adj("crush_left").to_shared();
         let crush_right_x = EventControl::<FieldGrad>::new().with_adj("crush_right").to_shared();
-
         let ex_pow = EventControl::<f64>::new().with_adj("rf90").to_shared();
         let ref_pow = EventControl::<f64>::new().with_adj("rf180").to_shared();
         let ref_phase = EventControl::<Angle>::new().with_constant(Angle::deg(90)).to_shared();
@@ -456,21 +475,24 @@ impl PulseSequence for DTIFse {
         el.add_event(events.rot_rd).unwrap();
         el.add_event(events.petr).unwrap();
 
-        el.set_time_span(REFT,PETL,100,0,Time::us(350)).unwrap();
-        el.set_time_span(PETL,ROT_RU,100,0,Time::us(100)).unwrap();
-        el.set_min_time_span(ROT_RU,ACQT,100,0,Time::us(100)).unwrap();
+        let echo_adj_us = 1500; // this needs to be balanced with the el pre-calc time
+        let el_pre_calc_time_us = 2000;
+
+        el.set_time_span(REFT,PETL,100,0,Time::us(echo_adj_us)).unwrap();
+        el.set_time_span(PETL,ROT_RU,100,0,Time::us(200)).unwrap();
+        el.set_min_time_span(ROT_RU,ACQT,100,0,Time::us(200)).unwrap();
         el.set_min_time_span(ACQT,ROT_RD,100,0,Time::us(100)).unwrap();
-        el.set_time_span(ROT_RD,PETR,100,0,Time::us(100)).unwrap();
+        el.set_time_span(ROT_RD,PETR,100,0,Time::us(200)).unwrap();
 
         let tau2 = el.get_time_span(REFT,ACQT,50,50).unwrap();
         let echo_spacing = tau2.scale(2);
 
-        el.set_pre_calc(Time::ms(1));
+        el.set_pre_calc(Time::us(el_pre_calc_time_us));
         el.set_rep_time(echo_spacing).expect("failed to set echo spacing");
         el.set_averages(0);
 
         vl.add_loop(el).unwrap();
-        vl.set_time_span(RE,REFT,100,0,Time::us(400)).unwrap();
+        vl.set_time_span(RE,REFT,100,0,Time::us(echo_adj_us)).unwrap();
         vl.set_pre_calc(Time::ms(3));
         vl.set_rep_time(Time::ms(100)).unwrap();
 
@@ -497,14 +519,22 @@ impl PulseSequence for DTIFse {
         state.insert("prephase_x".to_string(), 0.);
         state.insert("rf90".to_string(), 1.);
         state.insert("rf180".to_string(), 2.);
-        state.insert("diff_x".to_string(), 0.);
-        state.insert("diff_y".to_string(), 0.);
-        state.insert("diff_z".to_string(), 0.);
+        match self.mode {
+            Mode::Measure { .. } => {}
+            Mode::Acq { .. } => {}
+            Mode::Tune { .. } => {
+                state.insert("diff_x".to_string(), 0.);
+                state.insert("diff_y".to_string(), 0.);
+                state.insert("diff_z".to_string(), 0.);
+            }
+        }
         state
     }
 }
 
 fn main() {
+
+    let out_dir = r"/Users/wyatt/seq-lib/test_out";
 
     // compile with default settings
     let mut params = DTIFse::default();
@@ -514,98 +544,73 @@ fn main() {
     let s = params.compile();
     let mut adj = params.adjustment_state();
 
-    // find where inversion pulses occur to build q plot
-    let mut t_inv = s.find_occurrences(REF,50);
-    t_inv.extend(
-        s.find_occurrences(REFT,50)
-    );
-    let t_inv:Vec<_> = t_inv.into_iter().map(|t|t.as_sec()).collect();
-
     // build list of echo times to evaluate each b-matrix
     let mut t_echoes = vec![];
     // get the center of the first echo from the center of ACQ
-    t_echoes.push(
-        s.find_occurrences(ACQ,50).get(0).unwrap().as_sec()
-    );
-    let echo_train = s.find_occurrences(ACQT,50);
-    for i in 0..(params.n_echoes-1) { // number of acqT
-        t_echoes.push(
-            echo_train[i].as_sec()
-        )
-    }
+    t_echoes.extend(s.find_occurrences(ACQ,50));
+    t_echoes.extend(s.find_occurrences(ACQT,50));
 
     // print echo times
     for (i,echo) in t_echoes.iter().enumerate() {
-        println!("echo {}: {} ms",i+1, echo * 1e3);
+        println!("echo {}: {} ms",i+1, echo.as_ms());
     }
 
-    let target_bals = [1_000.,3_000.,5_000.,8_000.,10_000.,12_000.];
-
-    let grad_soltns:Vec<_> = target_bals.iter().map(|&target_bval|{
+    let grad_soltns:Vec<_> = params.target_bvalues.iter().map(|&target_bval|{
         grad_solve(
             &params,
             "diff_x",
             target_bval,
             FieldGrad::tesla_per_meter(0), // lower limit
-            FieldGrad::tesla_per_meter(2), // upper limit
+            FieldGrad::tesla_per_meter(params.g_limit_tpm), // upper limit
             &[REF,REFT],
-            Time::sec(t_echoes[0])
+            t_echoes[0]
         )
     }).collect();
 
-    for (soltn,target_bval) in grad_soltns.iter().zip(&target_bals) {
+    for (soltn,target_bval) in grad_soltns.iter().zip(&params.target_bvalues) {
         println!("solved for gradient strength of {} mT/m for target b-value {target_bval} s/mm^2", 1000. * soltn.si());
     }
 
-    // load b-vec table
-    //let (shell_idx,bvecs) = load_bvecs(r"C:\workstation\data\diffusion_table\26.wang.06\bvecs.txt");
-    let (shell_idx,bvecs) = load_bvecs(r"../26.wang.06/bvecs.txt");
+    // load b-vector table and scale the diffusion gradient strengths by each vector component
+    let (shell_idx, b_vectors) = load_bvecs(&params.bvec_table);
     let n_shells = *shell_idx.iter().max().unwrap() + 1;
-    assert_eq!(n_shells,target_bals.len(),"expect {} target b-vals based on max shell index",n_shells);
-    let grad_tab:Vec<_> = bvecs.iter().zip(shell_idx).map(|(bv,s_idx)|{
+    assert_eq!(n_shells,params.target_bvalues.len(),"expect {} target b-vals based on max shell index",n_shells);
+    let g_vectors:Vec<_> = b_vectors.iter().zip(shell_idx).map(|(bv,s_idx)|{
         [
             grad_soltns[s_idx].scale(bv[0]),
             grad_soltns[s_idx].scale(bv[1]),
-            grad_soltns[s_idx].scale(bv[2])
+            grad_soltns[s_idx].scale(bv[2]),
         ]
     }).collect();
 
-
-    // set the x-diffusion gradient to the solution
-    *adj.get_mut("diff_x").unwrap() = grad_soltns[0].si();
-    // re-render the timeline to model the b-factors
-    let w = s.render_timeline(&adj).render();
-    //evaluate b-matrix for each echo time and report the trace
-    for (i,&t) in t_echoes.iter().enumerate() {
-        let bmat = calc_b_matrix(&w,&t_inv,t,Nuc1H);
-        let b = bmat.trace();
-        println!("echo {} bval: {}",i+1,b)
+    // calculate the b-matrix for each b-vector and write to a file
+    use std::fmt::Write;
+    let mut b_info = String::new();
+    writeln!(&mut b_info,"idx\tgmax(T/m)\ttrace(s/mm^2)\tbxx\tbyy\tbzz\tbxy\tbxz\tbyz").unwrap();
+    let echo_idx = 0;
+    for (v, g_vector) in g_vectors.iter().enumerate() {
+        // set diffusion parameters to simulate b-values
+        *adj.get_mut("diff_x").unwrap() = g_vector[0].si();
+        *adj.get_mut("diff_y").unwrap() = g_vector[1].si();
+        *adj.get_mut("diff_z").unwrap() = g_vector[2].si();
+        let g_max = g_vector[0].si().abs().max(g_vector[1].si().abs()).max(g_vector[2].si().abs());
+        //evaluate b-matrix for each g-vector and write to string
+        let b_mat = calc_b_matrix(&params, &adj, &[REF,REFT], t_echoes[echo_idx], Nuc1H);
+        writeln!(&mut b_info,
+                 "{v}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                 g_max.si(), b_mat.trace(), b_mat.bxx, b_mat.byy, b_mat.bzz, b_mat.bxy, b_mat.bxz, b_mat.byz
+        ).unwrap();
     }
-
-    //params.mode = Mode::Tune{n:1000};
-    //params.mode = Mode::Acq;
+    File::create(Path::new(out_dir).join("b-info.txt")).unwrap().write_all(b_info.as_bytes()).unwrap();
 
     //params.mode = Mode::Acq { grad_table: grad_tab};
-    params.mode = Mode::Measure {r:3, grad_table: grad_tab};
-    //params.mode = Mode::Tune {n:10_000};
-    //println!("writing to file ...");
-    //params.render_to_file(&adj,"fse_dti");
-    //let d = r"D:\dev\test\251217_03\b0";
-    let d = r"/Users/wyatt/seq-lib";
-    compile_seq(&params.compile(),d,"seq",false);
-    //build_seq(d);
+    params.mode = Mode::Measure {r:3,n_dummies:5,fov_y:params.fov_y_mm,fov_z:params.fov_z_mm, g_vectors: g_vectors.clone()};
 
-}
+    compile_seq(&params.compile(),out_dir,"seq",false);
 
-fn load_bvecs(file:impl AsRef<Path>) -> (Vec<usize>,Vec<[f64;3]>) {
-    let mut f = File::open(file.as_ref()).unwrap();
-    let mut s = String::new();
-    f.read_to_string(&mut s).unwrap();
-    let mut shell_idx = vec![];
-    let bvecs:Vec<_> = s.lines().skip(1).map(|line| {
-        let line_entries:Vec<_> = line.split_ascii_whitespace().map(|s|s.trim().parse::<f64>().unwrap()).collect();
-        shell_idx.push(line_entries[0] as usize);
-        [line_entries[1],line_entries[2],line_entries[3]]
-    }).collect();
-    (shell_idx,bvecs)
+    params.mode = Mode::Tune {n:1};
+    let mut adj = params.adjustment_state();
+    *adj.get_mut("diff_x").unwrap() = 1.;
+    params.render_to_file(&adj,Path::new(out_dir).join("dti_fse"));
+
 }

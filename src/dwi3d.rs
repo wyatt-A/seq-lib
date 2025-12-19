@@ -79,18 +79,12 @@ impl Dwi3DParams {
         //     .get(0).unwrap().as_sec();
 
         let t_echo = if echo_idx == 0 {
-            vl.find_occurrences("acq",50).get(0).unwrap().as_sec()
+            *vl.find_occurrences("acq",50).get(0).unwrap()
         }else {
-            vl.find_occurrences("acq_2",50).get(echo_idx - 1).unwrap().as_sec()
+            *vl.find_occurrences("acq_2",50).get(echo_idx - 1).unwrap()
         };
 
-        // performs numerical integration to calculate b-matrix
-        calc_b_matrix(
-                &seq,
-                &t_inv,
-                t_echo,
-                Nuc1H,
-        )
+        calc_b_matrix(self,adj_state,&["rf180","rf1802"], t_echo, Nuc1H)
 
     }
 
