@@ -4,7 +4,10 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read};
 use std::path::{Path, PathBuf};
+use std::process::exit;
 use std::rc::Rc;
+use array_lib::ArrayDim;
+use array_lib::io_cfl::write_cfl;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{Angle, FieldGrad, Freq, Length, Time};
 use mr_units::quantity::Unit;
@@ -21,6 +24,9 @@ use seq_lib::PulseSequence;
 use seq_lib::rf_pulses::{hardpulse, hardpulse_composite};
 use mrs_ppl::compile::{build_seq, compile_seq};
 use seq_lib::q_calc::{binary_solve, calc_b_matrix, grad_solve, load_bvecs};
+use array_lib::io_mrd::read_mrd;
+use num_complex::Complex32;
+use rayon::prelude::*;
 
 // shorthand types
 type GW = Rc<Waveform>;
@@ -532,7 +538,68 @@ impl PulseSequence for DTIFse {
     }
 }
 
+fn find_phase_shifts(mrd_file:impl AsRef<Path>) {
+    let (data, dims, ..) = read_mrd(mrd_file);
+    let shape = dims.shape_ns();
+
+    let n_samples = shape[0];
+    let n_phase = shape[1];
+    let n_echoes = shape[4];
+    let n_q = shape[5];
+
+    println!("n_read samples: {}", n_samples);
+    println!("n_phase steps: {}", n_phase);
+    println!("n_echoes: {}", n_echoes);
+    println!("n_directions: {}", n_q);
+
+
+
+    let n_dummies = 5;
+    let r = 3;
+    let np = 2 * r + 1;
+
+    let vol_dim = ArrayDim::from_shape(&[n_samples, np, np]);
+
+    // trim dummy scans
+    let d_trimmed = ArrayDim::from_shape(&[n_samples, np, np, n_echoes, n_q]);
+    let mut y = d_trimmed.alloc(Complex32::ZERO);
+
+    // trim off the dummy scans
+    data.par_chunks_exact(n_samples * n_phase * n_echoes).zip(y.par_chunks_exact_mut(n_samples * np * np * n_echoes)).for_each(|(data,y)|{
+        data.par_chunks_exact(n_samples * n_phase).zip(y.par_chunks_exact_mut(n_samples * np * np)).for_each(|(data,y)|{
+            data.par_chunks_exact(n_samples).skip(n_dummies).zip(y.par_chunks_exact_mut(n_samples)).for_each(|(data,y)|{
+                y.copy_from_slice(data);
+            })
+        })
+    });
+
+    let mut c = [0,0,0];
+    let mut center = [0,0,0];
+    // where the dc sample should be
+    vol_dim.fft_shift_coords(&[0,0,0],&mut center);
+
+
+    // find the argmax for each volume / direction combo
+    y.chunks_exact(n_samples * np * np).enumerate().for_each(|(i,vol)|{
+        let [x,y,z, ..] = vol_dim.argmax_cf32(vol).unwrap();
+        let dx = x as i32 - center[0] as i32;
+        let dy = y as i32 - center[1] as i32;
+        let dz = z as i32 - center[2] as i32;
+        println!("{}: {}, {}, {}",i,dx,dy,dz);
+
+    });
+
+}
+
+
+
+
 fn main() {
+
+
+    find_phase_shifts("/Users/Wyatt/measure.MRD");
+
+    exit(0);
 
     let out_dir = r"/Users/wyatt/seq-lib/test_out";
 

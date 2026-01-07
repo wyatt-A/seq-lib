@@ -13,4 +13,5 @@ clap = { version = "4.5.53", features = ["derive"] }
 toml = "0.9.8"
 serde = { version = "1.0.228", features = ["derive"] }
 mrs-ppl = {git = "ssh://git@github.com/wyatt-A/mrs-ppl.git"}
-#mrs-ppl = {path = "../mrs-ppl"}
+array-lib = {git = "ssh://git@github.com/wyatt-A/array-lib.git", features = ["io-mrd","io-cfl"]}
+rayon = "1.11.0"
