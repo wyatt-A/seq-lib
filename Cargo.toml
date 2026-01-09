@@ -15,3 +15,4 @@ serde = { version = "1.0.228", features = ["derive"] }
 mrs-ppl = {git = "ssh://git@github.com/wyatt-A/mrs-ppl.git"}
 array-lib = {git = "ssh://git@github.com/wyatt-A/array-lib.git", features = ["io-mrd","io-cfl"]}
 rayon = "1.11.0"
+dft-lib = {git = "ssh://git@github.com/wyatt-A/dft-lib.git"}
