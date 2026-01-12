@@ -16,7 +16,7 @@ use seq_struct::grad_strength::EventControl;
 use seq_struct::gradient_event::GradEvent;
 use seq_struct::rf_event::RfEvent;
 use seq_struct::rf_pulse::RfPulse;
-use seq_struct::seq_loop::SeqLoop;
+use seq_struct::seq_loop::{Orientation, SeqLoop};
 use seq_struct::variable::LUT;
 use seq_struct::waveform::Waveform;
 use seq_lib::grad_pulses::{ramp_down, ramp_up, trapezoid};
@@ -103,8 +103,8 @@ impl Default for DTIFse {
             little_delta_ms: 1.7,
             g_limit_tpm: 2.3,
             n_echoes: 6,
-            cs_table: PathBuf::from(r"stream_CS256_8x_pa18_pb54"),
-            bvec_table: PathBuf::from(r"../26.wang.06/bvecs.txt"),
+            cs_table: PathBuf::from(r"C:\workstation\data\petableCS_stream\stream_CS256_8x_pa18_pb54"),
+            bvec_table: PathBuf::from(r"C:\workstation\data\diffusion_table\26.wang.06\bvecs.txt"),
             target_bvalues: vec![1_000.,3_000.,5_000.,8_000.,10_000.,12_000.],
             mode: Mode::Tune {n: 1_000},
         }
@@ -516,6 +516,7 @@ impl PulseSequence for DTIFse {
                 let mut el = SeqLoop::new(EXPERIMENT,n_dx);
                 el.add_loop(vl).unwrap();
                 el.set_pre_calc(Time::ms(1));
+                el.orientation = Some(Orientation::new(&[[Angle::deg(0),Angle::deg(0),Angle::deg(0)]]));
                 el
             },
         }
@@ -547,9 +548,9 @@ fn main() {
 
     //find_phase_shifts("/Users/Wyatt/measure.MRD");
 
-    exit(0);
+    //exit(0);
 
-    let out_dir = r"/Users/wyatt/seq-lib/test_out";
+    let out_dir = r"C:\Users\MRS\seq-lib\test_out";
 
     // compile with default settings
     let mut params = DTIFse::default();

@@ -3,7 +3,7 @@ use std::rc::Rc;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{Angle, FieldGrad, Freq, Length, Time};
 use mr_units::quantity::Unit;
-use mrs_ppl::compile::compile_seq;
+use mrs_ppl::compile::{build_seq, compile_seq};
 use seq_struct::acq_event::ACQEvent;
 use seq_struct::grad_strength::EventControl;
 use seq_struct::gradient_event::GradEvent;
@@ -35,8 +35,11 @@ const ACQ: &str = "acq";
 
 fn main() {
     let sp = SliceProfile::default();
-    let p = sp.adjustment_state();
-    sp.render_to_file(&p,"slice_profile");
+    let s = sp.compile();
+    compile_seq(&s,r"C:\Users\MRS\seq-lib\test_out","out",false);
+    build_seq(r"C:\Users\MRS\seq-lib\test_out");
+    // let p = sp.adjustment_state();
+    // sp.render_to_file(&p,"slice_profile");
 }
 
 struct SliceProfile {
@@ -105,8 +108,8 @@ struct EventControllers {
 impl EventControllers {
     pub fn new(params:&SliceProfile,w:&Waveforms) -> Self {
 
-        let exc_pow = EventControl::<f64>::new().with_constant(1.).to_shared();
-        let ref_pow = EventControl::<f64>::new().with_constant(2.).to_shared();
+        let exc_pow = EventControl::<f64>::new().with_scale(1.).to_shared();
+        let ref_pow = EventControl::<f64>::new().with_scale(2.).to_shared();
         let ref_phase = EventControl::<Angle>::new().with_constant(Angle::deg(90)).to_shared();
 
         let t_dwell = Freq::khz(params.bandwidth_khz).inv();
