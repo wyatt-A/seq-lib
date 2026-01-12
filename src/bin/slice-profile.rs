@@ -3,12 +3,13 @@ use std::rc::Rc;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{Angle, FieldGrad, Freq, Length, Time};
 use mr_units::quantity::Unit;
+use mrs_ppl::compile::compile_seq;
 use seq_struct::acq_event::ACQEvent;
 use seq_struct::grad_strength::EventControl;
 use seq_struct::gradient_event::GradEvent;
 use seq_struct::rf_event::RfEvent;
 use seq_struct::rf_pulse::RfPulse;
-use seq_struct::seq_loop::SeqLoop;
+use seq_struct::seq_loop::{Orientation, SeqLoop};
 use seq_struct::waveform::Waveform;
 use seq_lib::grad_pulses::{ramp_down, ramp_up, trapezoid};
 use seq_lib::PulseSequence;
@@ -243,7 +244,12 @@ impl PulseSequence for SliceProfile {
         vl.set_pre_calc(Time::ms(2));
         vl.set_rep_time(Time::ms(self.rep_time_ms)).unwrap();
 
-        vl
+        let mut el = SeqLoop::new("experiment",1);
+        el.orientation = Some(Orientation::new(&[[Angle::deg(90),Angle::deg(0),Angle::deg(0)]]));
+
+        el.add_loop(vl).unwrap();
+
+        el
     }
 
     fn adjustment_state(&self) -> HashMap<String, f64> {
