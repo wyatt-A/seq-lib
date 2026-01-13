@@ -24,6 +24,33 @@ use seq_struct::seq_loop::SeqLoop;
 use seq_struct::waveform::Waveform;
 use crate::rf_pulses::{hardpulse, hardpulse_composite, sinc5};
 
+pub mod defs {
+    use std::rc::Rc;
+    use mr_units::primitive::{Angle, FieldGrad};
+    use seq_struct::grad_strength::EventControl;
+    use seq_struct::rf_pulse::RfPulse;
+    use seq_struct::waveform::Waveform;
+
+    pub const VIEW:&str = "view";
+    /// Gradient waveform
+    pub type GW = Rc<Waveform>;
+    /// Rf pulse
+    pub type RF = Rc<RfPulse>;
+    /// Gradient strength controller
+    pub type GS = Rc<EventControl<FieldGrad>>;
+    /// Rf power controller
+    pub type RFP = Rc<EventControl<f64>>;
+    /// Rf phase controller
+    pub type RFPhase = Rc<EventControl<Angle>>;
+
+    // loop names
+    pub const ECHO:&str = "echo";
+    pub const EXPERIMENT:&str = "experiment";
+    pub const SLICE:&str = "slice";
+}
+
+
+
 
 #[derive(Parser, Debug)]
 pub struct InputArgs {
