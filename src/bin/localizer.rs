@@ -1,12 +1,14 @@
 use std::rc::Rc;
 use mr_units::constants::Nucleus::Nuc1H;
-use mr_units::primitive::{Angle, FieldGrad, Time};
+use mr_units::primitive::{Angle, FieldGrad, Freq, Length, Time};
+use mr_units::quantity::Unit;
 use seq_struct::grad_strength::EventControl;
 use seq_struct::rf_pulse::RfPulse;
+use seq_struct::variable::LUT;
 use seq_struct::waveform::Waveform;
 use seq_lib::grad_pulses::{ramp_down, ramp_up, trapezoid};
 use seq_lib::rf_pulses;
-use seq_lib::defs::{VIEW, SLICE, RF, GW};
+use seq_lib::defs::{VIEW, SLICE, RF, GW, GS};
 
 enum Plane {
     XY,
@@ -86,6 +88,66 @@ impl Waveforms {
             ru,
             rd,
             pe,
+        }
+
+    }
+}
+
+struct EventControllers {
+    gro: GS,
+    gsl: GS,
+    gslr: GS,
+    gpe: GS,
+    gpre: GS,
+}
+
+impl EventControllers {
+    fn build(params:&Localizer, waveforms: &Waveforms) -> EventControllers {
+
+        let t_dwell = Freq::khz(params.bandwidth_khz).inv();
+        let acq_t = t_dwell.scale(params.n_samples);
+
+        let gread = FieldGrad::from_fov(Length::mm(params.fov),t_dwell,Nuc1H);
+        let gro = EventControl::<FieldGrad>::new().with_constant_grad(gread).to_shared();
+
+        let rt = Time::us(params.grad_ramp_time_us);
+
+        // calculate pre-phase gradient strength
+        let m1:Time = (acq_t + rt).try_into().unwrap();
+        let m2:Time = (Time::ms(params.phase_enc_dur_ms) + rt).try_into().unwrap();
+        let f = m1 / m2;
+        let g_pre = gread.scale(-f.si() / 2.);
+        let gpre = EventControl::<FieldGrad>::new().with_constant_grad(g_pre).to_shared();
+
+        let g_sl = waveforms.rf_pulse.grad_strength(
+            Length::mm(params.slice_thickness_mm)
+        );
+
+        let gsl = EventControl::<FieldGrad>::new().with_constant_grad(g_sl).to_shared();
+
+        let m1:Time = (waveforms.rf_pulse.duration() + rt).try_into().unwrap();
+        let m2:Time = (Time::ms(params.phase_enc_dur_ms) + rt).try_into().unwrap();
+        let f = m1 / m2;
+        let g_slr = gread.scale(-f.si() / 2.);
+        let gslr = EventControl::<FieldGrad>::new().with_constant_grad(g_slr).to_shared();
+
+        let tpe:Time = (Time::ms(params.phase_enc_dur_ms) + rt).try_into().unwrap();
+        let gpe_step = FieldGrad::from_fov(Length::mm(params.fov),tpe,Nuc1H);
+
+        let mut steps = vec![];
+        for p in 0..params.n_samples as i32 {
+            steps.push(p - p/2)
+        }
+
+        let pe_lut = LUT::new("pelut",&steps).to_shared();
+        let gpe = EventControl::<FieldGrad>::new().with_lut(&pe_lut).with_grad_scale(gpe_step).to_shared();
+
+        EventControllers {
+            gro,
+            gsl,
+            gslr,
+            gpe,
+            gpre,
         }
 
     }
