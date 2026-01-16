@@ -230,8 +230,13 @@ impl PulseSequence for Localizer {
         sl.set_time_span("pe_ssr","roru",100,0,Time::us(200)).unwrap();
         sl.set_min_time_span("roru","acq",100,0,Time::us(0)).unwrap();
         sl.set_min_time_span("acq","rord",100,0,Time::us(0)).unwrap();
-
-        sl
+        sl.set_rep_time(Time::ms(20)).unwrap();
+        sl.set_pre_calc(Time::ms(2));
+        let mut vl = SeqLoop::new("view", self.n_samples);
+        vl.add_loop(sl).unwrap();
+        vl.set_rep_time(Time::ms(70)).unwrap();
+        vl.set_pre_calc(Time::ms(2));
+        vl
 
     }
 
