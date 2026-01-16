@@ -233,9 +233,9 @@ impl PulseSequence for Localizer {
         sl.set_rep_time(Time::ms(20)).unwrap();
         sl.set_pre_calc(Time::ms(2));
         let mut vl = SeqLoop::new("view", self.n_samples);
+        vl.set_pre_calc(Time::ms(2));
         vl.add_loop(sl).unwrap();
         vl.set_rep_time(Time::ms(70)).unwrap();
-        vl.set_pre_calc(Time::ms(2));
         vl
 
     }
