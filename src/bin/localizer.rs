@@ -1,14 +1,20 @@
+use std::collections::HashMap;
 use std::rc::Rc;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{Angle, FieldGrad, Freq, Length, Time};
 use mr_units::quantity::Unit;
+use mrs_ppl::compile::compile_seq;
+use seq_struct::acq_event::ACQEvent;
 use seq_struct::grad_strength::EventControl;
+use seq_struct::gradient_event::GradEvent;
+use seq_struct::rf_event::RfEvent;
 use seq_struct::rf_pulse::RfPulse;
+use seq_struct::seq_loop::{Orientations, SeqLoop};
 use seq_struct::variable::LUT;
 use seq_struct::waveform::Waveform;
 use seq_lib::grad_pulses::{ramp_down, ramp_up, trapezoid};
-use seq_lib::rf_pulses;
-use seq_lib::defs::{VIEW, SLICE, RF, GW, GS};
+use seq_lib::{rf_pulses, PulseSequence};
+use seq_lib::defs::{VIEW, SLICE, RF, GW, GS, RFP};
 
 enum Plane {
     XY,
@@ -99,6 +105,7 @@ struct EventControllers {
     gslr: GS,
     gpe: GS,
     gpre: GS,
+    rf: RFP,
 }
 
 impl EventControllers {
@@ -142,14 +149,96 @@ impl EventControllers {
         let pe_lut = LUT::new("pelut",&steps).to_shared();
         let gpe = EventControl::<FieldGrad>::new().with_lut(&pe_lut).with_grad_scale(gpe_step).to_shared();
 
+        let rf = EventControl::<f64>::new().with_adj("rf_pow").to_shared();
+
         EventControllers {
             gro,
             gsl,
             gslr,
             gpe,
             gpre,
+            rf,
         }
 
+    }
+}
+
+struct Events {
+    ssru: GradEvent,
+    ssrd: GradEvent,
+    alpha: RfEvent,
+    pe_ssr: GradEvent,
+    roru: GradEvent,
+    acq: ACQEvent,
+    rord: GradEvent,
+}
+
+impl Events {
+    fn build(params:&Localizer, w: &Waveforms, ec: &EventControllers) -> Events {
+
+        let ssru = GradEvent::new("ssru").with_z(&w.ru).with_strength_z(&ec.gsl);
+        let ssrd = GradEvent::new("ssrd").with_z(&w.rd).with_strength_z(&ec.gsl);
+        let pe_ssr = GradEvent::new("pe_ssr").with_y(&w.pe).with_strength_y(&ec.gpe).with_z(&w.pe).with_strength_z(&ec.gslr);
+        let alpha = RfEvent::new("alpha",&w.rf_pulse,&ec.rf);
+
+        let roru = GradEvent::new("roru").with_x(&w.ru).with_strength_x(&ec.gro);
+        let rord = GradEvent::new("rord").with_x(&w.rd).with_strength_x(&ec.gro);
+        let acq = ACQEvent::new("acq",params.n_samples,Freq::khz(params.bandwidth_khz).inv());
+
+        Events {
+            ssru,
+            ssrd,
+            alpha,
+            pe_ssr,
+            roru,
+            acq,
+            rord,
+        }
+    }
+}
+
+impl PulseSequence for Localizer {
+    fn compile(&self) -> SeqLoop {
+
+        let waveforms = Waveforms::build(&self);
+        let event_controllers = EventControllers::build(self, &waveforms);
+        let events = Events::build(&self,&waveforms,&event_controllers);
+
+        let mut sl = SeqLoop::new_main("slice",3);
+
+        // 3-plane localizer rotations
+        let orient = [
+            [Angle::deg(0),Angle::deg(0),Angle::deg(0)],
+            [Angle::deg(90),Angle::deg(0),Angle::deg(0)],
+            [Angle::deg(0),Angle::deg(90),Angle::deg(0)],
+            ];
+
+        sl.set_orientations(Orientations::new(&orient));
+
+        sl.add_event(events.ssru).unwrap();
+        sl.add_event(events.alpha).unwrap();
+        sl.add_event(events.ssrd).unwrap();
+        sl.add_event(events.pe_ssr).unwrap();
+        sl.add_event(events.roru).unwrap();
+        sl.add_event(events.acq).unwrap();
+        sl.add_event(events.rord).unwrap();
+
+
+        sl.set_time_span("ssru","alpha",100,0,Time::us(100)).unwrap();
+        sl.set_min_time_span("alpha","ssrd",100,0,Time::us(0)).unwrap();
+        sl.set_time_span("ssrd","pe_ssr",100,0,Time::us(200)).unwrap();
+        sl.set_time_span("pe_ssr","roru",100,0,Time::us(200)).unwrap();
+        sl.set_min_time_span("roru","acq",100,0,Time::us(0)).unwrap();
+        sl.set_min_time_span("acq","rord",100,0,Time::us(0)).unwrap();
+
+        sl
+
+    }
+
+    fn adjustment_state(&self) -> HashMap<String, f64> {
+        let mut adj = HashMap::new();
+        adj.insert("rf_pow".to_string(),1.);
+        adj
     }
 }
 
@@ -157,5 +246,7 @@ impl EventControllers {
 
 
 fn main() {
-    let loop_name = VIEW;
+
+    let seqloop = Localizer::default().compile();
+
 }
