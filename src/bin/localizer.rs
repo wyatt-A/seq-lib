@@ -17,7 +17,7 @@ use seq_lib::{rf_pulses, PulseSequence};
 use seq_lib::defs::{VIEW, SLICE, RF, GW, GS, RFP};
 
 fn main() {
-    let out_dir = r"D:\dev\test\260116";
+    let out_dir = r"D:\dev\test\260123";
     let mut localizer = Localizer::default();
     localizer.setup_mode = false;
     let localizer = localizer.compile();
@@ -43,7 +43,7 @@ impl Default for Localizer {
             bandwidth_khz: 100.0,
             n_samples: 256,
             fov: 25.6,
-            slice_thickness_mm: 0.1,
+            slice_thickness_mm: 0.3,
             rf_duration_us: 1500,
             grad_ramp_time_us: 500,
             phase_enc_dur_ms: 0.5,
@@ -164,7 +164,7 @@ impl EventControllers {
 
         let rf = EventControl::<f64>::new().with_adj("rf_pow").to_shared();
 
-        let gsc = EventControl::<FieldGrad>::new().with_adj("gsc").to_shared();
+        let gsc = EventControl::<FieldGrad>::new().with_constant_grad(g_pre.scale(-1)).with_adj("gsc").to_shared();
 
         EventControllers {
             gro,
@@ -201,7 +201,10 @@ impl Events {
         let rord = GradEvent::new("rord").with_x(&w.rd).with_strength_x(&ec.gro);
         let acq = ACQEvent::new("acq",params.n_samples,Freq::khz(params.bandwidth_khz).inv());
 
-        let gsc = GradEvent::new("gsc").with_x(&w.pe).with_strength_x(&ec.gsc).with_y(&w.pe).with_strength_y(&ec.gsc).with_z(&w.pe).with_strength_z(&ec.gsc);
+        let gsc = GradEvent::new("gsc")
+            .with_x(&w.pe).with_strength_x(&ec.gsc)
+            .with_y(&w.pe).with_strength_y(&ec.gsc)
+            .with_z(&w.pe).with_strength_z(&ec.gsc);
 
 
 
@@ -234,8 +237,8 @@ impl PulseSequence for Localizer {
         }else {
             let o = [
                 [Angle::deg(0),Angle::deg(0),Angle::deg(0)],
-                [Angle::deg(0),Angle::deg(90),Angle::deg(0)],
                 [Angle::deg(0),Angle::deg(0),Angle::deg(90)],
+                [Angle::deg(0),Angle::deg(-90),Angle::deg(0)],
             ];
             sl.set_orientations(Orientations::new(&o));
         };
@@ -256,7 +259,7 @@ impl PulseSequence for Localizer {
         sl.set_time_span("pe_ssr","roru",100,0,Time::us(200)).unwrap();
         sl.set_min_time_span("roru","acq",100,0,Time::us(0)).unwrap();
         sl.set_min_time_span("acq","rord",100,0,Time::us(0)).unwrap();
-        sl.set_min_time_span("rord","gsc",100,0,Time::us(0)).unwrap();
+        sl.set_min_time_span("rord","gsc",100,0,Time::us(100)).unwrap();
         sl.set_rep_time(Time::ms(10)).unwrap();
         sl.set_pre_calc(Time::ms(4));
         let mut vl = SeqLoop::new("view", self.n_samples);
