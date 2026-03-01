@@ -16,5 +16,4 @@ mrs-ppl = {git = "ssh://git@github.com/wyatt-A/mrs-ppl.git"}
 array-lib = {git = "ssh://git@github.com/wyatt-A/array-lib.git", features = ["io-mrd","io-cfl"]}
 rayon = "1.11.0"
 dft-lib = {git = "ssh://git@github.com/wyatt-A/dft-lib.git"}
-param-group = {path = "../param-group"}
-#param-group = {git = "ssh://git@github.com/wyatt-A/param-group.git"}
+param-editor = {git = "ssh://git@github.com/wyatt-A/param-editor.git"}

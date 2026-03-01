@@ -15,11 +15,11 @@ use seq_struct::waveform::Waveform;
 use seq_lib::grad_pulses::{ramp_down, ramp_up, trapezoid};
 use seq_lib::{rf_pulses, PulseSequence};
 use seq_lib::defs::{VIEW, SLICE, RF, GW, GS, RFP};
-use param_group::param_tree::{ParamTree};
-use param_group::value::Value;
-use param_group::{edit, unit};
-use param_group::parameter::Parameter;
-use param_group::ParameterTree;
+use param_editor::param_tree::{ParamTree};
+use param_editor::value::Value;
+use param_editor::{edit, unit};
+use param_editor::parameter::Parameter;
+use param_editor::ParameterTree;
 use seq_lib::Args;
 
 
