@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::rc::Rc;
+use clap::Parser;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{Angle, FieldGrad, Freq, Length, Time};
 use mr_units::quantity::Unit;
@@ -15,52 +15,101 @@ use seq_struct::waveform::Waveform;
 use seq_lib::grad_pulses::{ramp_down, ramp_up, trapezoid};
 use seq_lib::{rf_pulses, PulseSequence};
 use seq_lib::defs::{VIEW, SLICE, RF, GW, GS, RFP};
-use param_group::param_tree::{ParamTree, Value};
+use param_group::param_tree::{ParamTree};
+use param_group::value::Value;
+use param_group::{edit, unit};
+use param_group::parameter::Parameter;
+use param_group::ParameterTree;
+use seq_lib::Args;
 
 
 fn main() {
     let out_dir = r"D:\dev\test\260123";
 
-    let param_file = "params/1_localizer.toml";
-    let param_tree = ParamTree::from_file(param_file);
-    let params = param_tree.dump_params().unwrap();
+    let args = Args::parse();
 
+    let param_tree = if args.init {
+        Localizer::default().param_tree()
+    }else {
+        ParamTree::from_file(&args.param_file).unwrap()
+    };
 
-    let mut localizer = Localizer::default();
-    localizer.setup_mode = false;
+    let localizer = Localizer::from_params(&param_tree);
+
+    localizer.param_tree().to_json_file(&args.param_file).unwrap();
+
+    if args.edit {
+        edit(&args.param_file).unwrap();
+    }
+
     let localizer = localizer.compile();
-    compile_seq(&localizer, out_dir, "localizer", false);
-    build_seq(out_dir)
+    //compile_seq(&localizer, out_dir, "localizer", false);
+    //build_seq(out_dir)
 }
 
 
+impl ParameterTree for Localizer {
+    fn param_tree(&self) -> ParamTree {
+        ParamTree::new("localizer_default","localizer")
+            .with_parameter(
+                "Geometry",
+                "FOV",
+                Parameter::new("fov","fov",Value::Float(self.fov)).with_unit_str("mm").unwrap()
+            ).unwrap()
+            .with_parameter(
+                "Geometry",
+                "Slice Selection",
+                Parameter::new("t_slice","slice thickness",Value::Float(self.slice_thickness_mm)).with_unit_str("mm").unwrap()
+            ).unwrap()
+            .with_parameter(
+                "Geometry",
+                "Slice Selection",
+                Parameter::new("d_slice","pulse duration",Value::Count(self.rf_duration_us)).with_unit_str("us").unwrap()
+            ).unwrap()
+            .with_parameter(
+                "Sampling",
+                "Matrix",
+                Parameter::new("n_read","n read",Value::Count(self.n_samples))
+            ).unwrap()
+            .with_parameter(
+                "Sampling",
+                "Bandwidth",
+                Parameter::new("bw","bandwidth",Value::Float(self.bandwidth_khz)).with_unit_str("khz").unwrap()
+            ).unwrap()
+            .with_parameter(
+                "Gradient",
+                "Timing",
+                Parameter::new("t_ramp","ramp time",Value::Count(self.grad_ramp_time_us)).with_unit_str("us").unwrap()
+            ).unwrap()
+            .with_parameter(
+                "Gradient",
+                "Timing",
+                Parameter::new("t_phase","pe time",Value::Float(self.phase_enc_dur_ms)).with_unit_str("ms").unwrap()
+            ).unwrap()
+            .with_parameter(
+                "Mode",
+                "Setup",
+                Parameter::new("setup","setup mode",Value::Bool(self.setup_mode))
+            ).unwrap()
+    }
 
-impl TryFrom<ParamTree> for Localizer {
-    type Error = ();
-    fn try_from(params: ParamTree) -> Result<Self, Self::Error> {
-
-        let params = params.dump_params().unwrap();
-        let fov = params.get("fov").unwrap().as_float().unwrap();
-        let slice_thickness_mm = params.get("slice_thickness").unwrap().as_float().unwrap();
-        let n_samples = params.get("n_samples").unwrap().as_count().unwrap();
-        let bandwidth_khz = params.get("bandwidth").unwrap().as_float().unwrap();
-        let rf_duration_us = params.get("rf_dur").unwrap().as_count().unwrap();
-        let grad_ramp_time_us = params.get("t_ramp").unwrap().as_count().unwrap();
-        let phase_enc_dur_ms = params.get("t_enc").unwrap().as_float().unwrap();
-
-        Ok(Localizer {
-            fov,
-            slice_thickness_mm,
-            n_samples,
-            bandwidth_khz,
-            rf_duration_us,
-            grad_ramp_time_us,
-            phase_enc_dur_ms,
-            setup_mode: false,
-        })
-
+    fn from_params(param_tree: &ParamTree) -> Self {
+        // this dump may not work if there is a name collision. If there is a name collision,
+        // we need to query params by tab and group address
+        let params = param_tree.flatten_params().unwrap();
+        Localizer {
+            fov: params.get("fov").unwrap().into(),
+            slice_thickness_mm: params.get("t_slice").unwrap().into(),
+            n_samples: params.get("n_read").unwrap().into(),
+            bandwidth_khz: params.get("bw").unwrap().into(),
+            rf_duration_us: params.get("d_slice").unwrap().into(),
+            grad_ramp_time_us: params.get("t_ramp").unwrap().into(),
+            phase_enc_dur_ms: params.get("t_phase").unwrap().into(),
+            setup_mode: params.get("setup").unwrap().into(),
+        }
     }
 }
+
 
 struct Localizer {
     fov: f64,

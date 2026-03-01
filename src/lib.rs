@@ -9,7 +9,7 @@ pub mod rf_cal;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use clap::{Args, Parser};
+use clap::{Parser};
 pub use seq_struct;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{Angle, FieldGrad, Freq, Length, Time};
@@ -19,10 +19,25 @@ use seq_struct::compile::{Seq, Timeline};
 use seq_struct::grad_strength::EventControl;
 use seq_struct::gradient_event::GradEvent;
 use seq_struct::rf_event::RfEvent;
-use seq_struct::rf_pulse::RfPulse;
 use seq_struct::seq_loop::SeqLoop;
 use seq_struct::waveform::Waveform;
 use crate::rf_pulses::{hardpulse, hardpulse_composite, sinc5};
+
+
+#[derive(clap::Parser)]
+pub struct Args {
+
+    /// parameter file to read or write
+    pub param_file: PathBuf,
+
+    /// initialize parameters with default values
+    #[clap(long)]
+    pub init: bool,
+
+    /// open parameter editor
+    #[clap(long)]
+    pub edit: bool,
+}
 
 pub mod defs {
     use std::rc::Rc;
