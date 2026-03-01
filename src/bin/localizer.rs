@@ -15,9 +15,17 @@ use seq_struct::waveform::Waveform;
 use seq_lib::grad_pulses::{ramp_down, ramp_up, trapezoid};
 use seq_lib::{rf_pulses, PulseSequence};
 use seq_lib::defs::{VIEW, SLICE, RF, GW, GS, RFP};
+use param_group::param_tree::{ParamTree, Value};
+
 
 fn main() {
     let out_dir = r"D:\dev\test\260123";
+
+    let param_file = "params/1_localizer.toml";
+    let param_tree = ParamTree::from_file(param_file);
+    let params = param_tree.dump_params().unwrap();
+
+
     let mut localizer = Localizer::default();
     localizer.setup_mode = false;
     let localizer = localizer.compile();
@@ -25,12 +33,42 @@ fn main() {
     build_seq(out_dir)
 }
 
+
+
+impl TryFrom<ParamTree> for Localizer {
+    type Error = ();
+    fn try_from(params: ParamTree) -> Result<Self, Self::Error> {
+
+        let params = params.dump_params().unwrap();
+        let fov = params.get("fov").unwrap().as_float().unwrap();
+        let slice_thickness_mm = params.get("slice_thickness").unwrap().as_float().unwrap();
+        let n_samples = params.get("n_samples").unwrap().as_count().unwrap();
+        let bandwidth_khz = params.get("bandwidth").unwrap().as_float().unwrap();
+        let rf_duration_us = params.get("rf_dur").unwrap().as_count().unwrap();
+        let grad_ramp_time_us = params.get("t_ramp").unwrap().as_count().unwrap();
+        let phase_enc_dur_ms = params.get("t_enc").unwrap().as_float().unwrap();
+
+        Ok(Localizer {
+            fov,
+            slice_thickness_mm,
+            n_samples,
+            bandwidth_khz,
+            rf_duration_us,
+            grad_ramp_time_us,
+            phase_enc_dur_ms,
+            setup_mode: false,
+        })
+
+    }
+}
+
 struct Localizer {
-    /// determines the mode to compile the sequence in
-    bandwidth_khz: f64,
-    n_samples: usize,
     fov: f64,
     slice_thickness_mm: f64,
+
+    n_samples: usize,
+    bandwidth_khz: f64,
+
     rf_duration_us: usize,
     grad_ramp_time_us: usize,
     phase_enc_dur_ms: f64,

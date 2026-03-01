@@ -1,0 +1,96 @@
+name = "20260228 - localizer"
+pulse_sequence = "localizer"
+
+[[tab]]
+name = "Geometry"
+
+[[tab.group]]
+name = "FOV"
+
+[[tab.group.param]]
+name = "fov"
+label = "fov"
+unit = "mm"
+help = "fov for x and y axes"
+
+[[tab.group.param.value]]
+Float = 20.0
+
+[[tab.group.param]]
+name = "slice_thickness"
+label = "slice thickness"
+unit = "mm"
+help = "slice thickness"
+
+[tab.group.param.value]
+Float = 1.0
+
+[[tab]]
+name = "Sampling"
+
+[[tab.group]]
+name = "Samples"
+
+[[tab.group.param]]
+name = "n_samples"
+label = "n read"
+help = "number of readout samples"
+
+[[tab.group.param.value]]
+Count = 512
+
+[[tab]]
+name = "Sequence"
+
+[[tab.group]]
+name = "Bandwidth"
+
+[[tab.group.param]]
+name = "bandwidth"
+label = "bandwidth"
+unit = "khz"
+help = "acq bandwidth"
+
+[[tab.group.param.value]]
+Float = 100.0
+
+[[tab.group]]
+name = "RF"
+
+[[tab.group.param]]
+name = "rf_dur"
+label = "RF pulse duration"
+unit = "us"
+help = "duration of rf pulse"
+
+[[tab.group.param.value]]
+Count = 1500
+
+[[tab.group]]
+name = "Grad"
+
+[[tab.group.param]]
+name = "t_ramp"
+label = "ramp time"
+unit = "us"
+help = "gradient ramp time"
+
+[[tab.group.param.value]]
+Count = 500
+
+[[tab.group.param]]
+name = "t_encode"
+label = "phase encode time"
+unit = "ms"
+help = "duration of phase encoding"
+
+[[tab.group.param.value]]
+Float = 0.5
+
+#[[tab.group.param]]
+#name = "setup"
+#label = "setup_mode"
+#help = "compile in setup mode"
+#
+#[[tab.group.param.value]]
+#Bool = False
