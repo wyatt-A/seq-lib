@@ -17,4 +17,4 @@ array-lib = {git = "ssh://git@github.com/wyatt-A/array-lib.git", features = ["io
 rayon = "1.11.0"
 dft-lib = {git = "ssh://git@github.com/wyatt-A/dft-lib.git"}
 param-editor = {git = "ssh://git@github.com/wyatt-A/param-editor.git"}
-pulse-seq-view = {path = "../pulse-seq-view"}
+pulse-seq-view = {git = "ssh://git@github.com/wyatt-A/pulse-seq-view.git"}

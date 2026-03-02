@@ -45,7 +45,7 @@ fn main() {
 
     let state = localizer.adjustment_state();
 
-    let timeline_data = localizer.render_timeline(&state).to_raw();
+    let timeline_data = localizer.render_timeline(&state).to_raw_loop_range(0,2);
     run_viewer(timeline_data).unwrap();
 
     let localizer = localizer.compile();
