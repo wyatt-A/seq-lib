@@ -20,6 +20,7 @@ use param_editor::value::Value;
 use param_editor::{edit, unit};
 use param_editor::parameter::Parameter;
 use param_editor::ParameterTree;
+use pulse_seq_view::run_viewer;
 use seq_lib::Args;
 
 
@@ -41,6 +42,11 @@ fn main() {
     if args.edit {
         edit(&args.param_file).unwrap();
     }
+
+    let state = localizer.adjustment_state();
+
+    let timeline_data = localizer.render_timeline(&state).to_raw();
+    run_viewer(timeline_data).unwrap();
 
     let localizer = localizer.compile();
     //compile_seq(&localizer, out_dir, "localizer", false);
@@ -361,6 +367,7 @@ impl PulseSequence for Localizer {
         let mut adj = HashMap::new();
         adj.insert("rf_pow".to_string(),1.);
         adj.insert("ssr".to_string(),0.);
+        adj.insert("gsc".to_string(),0.);
         adj
     }
 }

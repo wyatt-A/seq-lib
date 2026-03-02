@@ -552,12 +552,12 @@ fn main() {
     let out_dir = r"C:\Users\MRS\seq-lib\test_out";
 
     // compile with default settings
-    let mut params = DTIFse::default();
+    let mut sequence = DTIFse::default();
 
     // mode for single rep through k0
-    params.mode = Mode::Tune {n:1};
-    let s = params.compile();
-    let mut adj = params.adjustment_state();
+    sequence.mode = Mode::Tune {n:1};
+    let s = sequence.compile();
+    let mut adj = sequence.adjustment_state();
 
     // build list of echo times to evaluate each b-matrix
     let mut t_echoes = vec![];
@@ -570,26 +570,26 @@ fn main() {
         println!("echo {}: {} ms",i+1, echo.as_ms());
     }
 
-    let grad_soltns:Vec<_> = params.target_bvalues.iter().map(|&target_bval|{
+    let grad_soltns:Vec<_> = sequence.target_bvalues.iter().map(|&target_bval|{
         grad_solve(
-            &params,
+            &sequence,
             "diff_x",
             target_bval,
             FieldGrad::tesla_per_meter(0), // lower limit
-            FieldGrad::tesla_per_meter(params.g_limit_tpm), // upper limit
+            FieldGrad::tesla_per_meter(sequence.g_limit_tpm), // upper limit
             &[REF,REFT],
             t_echoes[0]
         )
     }).collect();
 
-    for (soltn,target_bval) in grad_soltns.iter().zip(&params.target_bvalues) {
+    for (soltn,target_bval) in grad_soltns.iter().zip(&sequence.target_bvalues) {
         println!("solved for gradient strength of {} mT/m for target b-value {target_bval} s/mm^2", 1000. * soltn.si());
     }
 
     // load b-vector table and scale the diffusion gradient strengths by each vector component
-    let (shell_idx, b_vectors) = load_bvecs(&params.bvec_table);
+    let (shell_idx, b_vectors) = load_bvecs(&sequence.bvec_table);
     let n_shells = *shell_idx.iter().max().unwrap() + 1;
-    assert_eq!(n_shells,params.target_bvalues.len(),"expect {} target b-vals based on max shell index",n_shells);
+    assert_eq!(n_shells, sequence.target_bvalues.len(), "expect {} target b-vals based on max shell index", n_shells);
     let g_vectors:Vec<_> = b_vectors.iter().zip(shell_idx).map(|(bv,s_idx)|{
         [
             grad_soltns[s_idx].scale(bv[0]),
@@ -610,7 +610,7 @@ fn main() {
         *adj.get_mut("diff_z").unwrap() = g_vector[2].si();
         let g_max = g_vector[0].si().abs().max(g_vector[1].si().abs()).max(g_vector[2].si().abs());
         //evaluate b-matrix for each g-vector and write to string
-        let b_mat = calc_b_matrix(&params, &adj, &[REF,REFT], t_echoes[echo_idx], Nuc1H);
+        let b_mat = calc_b_matrix(&sequence, &adj, &[REF,REFT], t_echoes[echo_idx], Nuc1H);
         writeln!(&mut b_info,
                  "{v}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                  g_max.si(), b_mat.trace(), b_mat.bxx, b_mat.byy, b_mat.bzz, b_mat.bxy, b_mat.bxz, b_mat.byz
@@ -619,13 +619,13 @@ fn main() {
     File::create(Path::new(out_dir).join("b-info.txt")).unwrap().write_all(b_info.as_bytes()).unwrap();
 
     //params.mode = Mode::Acq { grad_table: grad_tab};
-    params.mode = Mode::Measure {r:3,n_dummies:5,fov_y:params.fov_y_mm,fov_z:params.fov_z_mm, g_vectors: g_vectors.clone()};
+    sequence.mode = Mode::Measure {r:3,n_dummies:5,fov_y: sequence.fov_y_mm,fov_z: sequence.fov_z_mm, g_vectors: g_vectors.clone()};
 
-    compile_seq(&params.compile(),out_dir,"seq",false);
+    compile_seq(&sequence.compile(), out_dir, "seq", false);
 
-    params.mode = Mode::Tune {n:1};
-    let mut adj = params.adjustment_state();
+    sequence.mode = Mode::Tune {n:1};
+    let mut adj = sequence.adjustment_state();
     *adj.get_mut("diff_x").unwrap() = 1.;
-    params.render_to_file(&adj,Path::new(out_dir).join("dti_fse"));
+    sequence.render_to_file(&adj, Path::new(out_dir).join("dti_fse"));
 
 }
