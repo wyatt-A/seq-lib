@@ -116,7 +116,7 @@ impl ParameterTree for Localizer {
     }
 }
 
-
+#[derive(Clone,Debug)]
 struct Localizer {
     fov: f64,
     slice_thickness_mm: f64,
@@ -314,7 +314,7 @@ impl Events {
 }
 
 impl PulseSequence for Localizer {
-    fn compile(&self) -> SeqLoop {
+    fn compile(&self) -> (SeqLoop,Self) {
 
         let waveforms = Waveforms::build(&self);
         let event_controllers = EventControllers::build(self, &waveforms);
@@ -359,7 +359,8 @@ impl PulseSequence for Localizer {
         vl.set_pre_calc(Time::ms(2));
         vl.add_loop(sl).unwrap();
         vl.set_rep_time(Time::ms(50)).unwrap();
-        vl
+
+        (vl,self.clone())
 
     }
 

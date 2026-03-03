@@ -1,9 +1,7 @@
 pub mod rf_pulses;
 pub mod grad_pulses;
-pub mod ring_down;
 pub mod se3d;
 pub mod ssme;
-pub mod dwi3d;
 pub mod q_calc;
 pub mod rf_cal;
 
@@ -62,6 +60,9 @@ pub mod defs {
     pub const ECHO:&str = "echo";
     pub const EXPERIMENT:&str = "experiment";
     pub const SLICE:&str = "slice";
+
+    // rf power adj
+    pub const RF_POWER:&str = "rf_power";
 }
 
 
@@ -80,56 +81,29 @@ pub struct InputArgs {
     pub default: bool,
 }
 
-
-#[cfg(test)]
-mod tests {
-    use crate::{PulseSequence, SliceProfileSE};
-
-    #[test]
-    pub fn slice_profile_se() {
-
-        let s = SliceProfileSE {
-            rf_dur_us: 140,
-            ramp_time_us: 200,
-            crush_dur_us: 300,
-            bw_hz: 100_000.,
-            n_reps: 10,
-            fov_mm: 20.,
-            n_samples: 256,
-            te_ms: 10.,
-            rep_time_ms: 500.0,
-        };
-
-        let seq = s.compile();
-        let adj_state = s.adjustment_state();
-        let t = seq.render_timeline(&adj_state);
-        t.write_to_file("se_out.txt")
-    }
-
-}
-
 /// Specifies a data structure that compiles to a pulse sequence
 pub trait PulseSequence: Default {
     /// main pulse sequence generation routine. This is where all the pulse sequence logic is
     /// implemented
-    fn compile(&self) -> SeqLoop;
+    fn compile(&self) -> (SeqLoop,Self);
     fn adjustment_state(&self) -> HashMap<String,f64>;
 
     fn render_timeline(&self,state:&HashMap<String,f64>) -> Timeline {
-        self.compile().render_timeline(state)
+        self.compile().0.render_timeline(state)
     }
 
     /// render sequence timeline `[t,Gx,Gy,Gz,Bx,By,rec]` where t (sec), G (T/m), B (T), rec (rad)
     fn render(&self,state:&HashMap<String,f64>) -> Seq {
-        self.compile().render_timeline(state).render()
+        self.compile().0.render_timeline(state).render()
     }
 
     fn render_to_file(&self, state:&HashMap<String,f64>, filename:impl AsRef<Path>) {
-        self.compile().render_timeline(state).write_to_file(filename)
+        self.compile().0.render_timeline(state).write_to_file(filename)
     }
 
 }
 
+#[derive(Debug,Clone)]
 pub struct SliceProfileSE {
     rf_dur_us: usize,
     ramp_time_us: usize,
@@ -171,7 +145,7 @@ impl PulseSequence for SliceProfileSE {
         state
     }
 
-    fn compile(&self) -> SeqLoop {
+    fn compile(&self) -> (SeqLoop,Self) {
 
         let rf_dt = Time::us(2);
         let grad_dt = Time::us(2);
@@ -278,12 +252,12 @@ impl PulseSequence for SliceProfileSE {
 
         vl.set_rep_time(Time::ms(self.rep_time_ms)).unwrap();
 
-        vl
+        (vl,self.clone())
     }
 }
 
 
-
+#[derive(Debug,Clone)]
 pub struct RfCal {
 
     n_reps: usize,
@@ -313,7 +287,7 @@ impl Default for RfCal {
 }
 
 impl PulseSequence for RfCal {
-    fn compile(&self) -> SeqLoop {
+    fn compile(&self) -> (SeqLoop,Self) {
 
         let bw = Freq::hz(self.bandwidth_hz);
         let grad_stab_time = Time::ms(self.grad_stab_time_ms);
@@ -424,7 +398,7 @@ impl PulseSequence for RfCal {
 
         vl.set_rep_time(rep_time).unwrap();
 
-        vl
+        (vl,self.clone())
 
 
     }

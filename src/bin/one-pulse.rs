@@ -22,7 +22,7 @@ type RF = Rc<RfPulse>;
 const RF: &'static str = "rf";
 const ACQ: &'static str = "acq";
 
-#[derive(Serialize,Deserialize)]
+#[derive(Serialize,Deserialize,Clone,Debug)]
 struct OnePulse {
     bandwidth_khz: f64,
     n_samples: usize,
@@ -50,7 +50,7 @@ impl Default for OnePulse {
 
 
 impl PulseSequence for OnePulse {
-    fn compile(&self) -> SeqLoop {
+    fn compile(&self) -> (SeqLoop,Self) {
         let mut vl = SeqLoop::new_main("view",self.n_reps);
         let events = Events::new(self);
         vl.add_event(events.rf_pulse).unwrap();
@@ -58,7 +58,7 @@ impl PulseSequence for OnePulse {
         vl.set_time_span(RF,ACQ,50,0,Time::us(self.delay_us)).unwrap();
         vl.set_pre_calc(Time::ms(2));
         vl.set_rep_time(Time::ms(self.rep_time_ms)).unwrap();
-        vl
+        (vl,self.clone())
     }
 
     fn adjustment_state(&self) -> HashMap<String, f64> {

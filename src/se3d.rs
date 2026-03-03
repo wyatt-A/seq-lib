@@ -12,6 +12,7 @@ use seq_struct::waveform::Waveform;
 use crate::{PulseSequence, SliceProfileSE};
 use crate::rf_pulses::{hardpulse, sinc3, sinc5};
 
+#[derive(Debug,Clone)]
 pub struct GradientEcho2D {
     rf_dur_us: usize,
     ramp_time_us: usize,
@@ -48,7 +49,7 @@ impl Default for GradientEcho2D {
 }
 
 impl PulseSequence for GradientEcho2D {
-    fn compile(&self) -> SeqLoop {
+    fn compile(&self) -> (SeqLoop,Self) {
 
         let rf_dt = Time::us(2);
         let grad_dt = Time::us(2);
@@ -169,7 +170,7 @@ impl PulseSequence for GradientEcho2D {
 
         vl.set_rep_time(Time::ms(self.rep_time_ms)).unwrap();
 
-        vl
+        (vl,self.clone())
 
 
     }
@@ -179,7 +180,7 @@ impl PulseSequence for GradientEcho2D {
     }
 }
 
-
+#[derive(Debug, Clone)]
 pub struct SpinEcho2D {
     rf_dur_us: usize,
     ramp_time_us: usize,
@@ -215,7 +216,7 @@ impl Default for SpinEcho2D {
 }
 
 impl PulseSequence for SpinEcho2D {
-    fn compile(&self) -> SeqLoop {
+    fn compile(&self) -> (SeqLoop,Self) {
 
         let rf_dt = Time::us(2);
         let grad_dt = Time::us(2);
@@ -357,7 +358,8 @@ impl PulseSequence for SpinEcho2D {
 
         vl.set_rep_time(Time::ms(self.rep_time_ms)).unwrap();
 
-        vl
+        (vl,self.clone())
+
     }
 
     fn adjustment_state(&self) -> HashMap<String, f64> {

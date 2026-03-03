@@ -66,7 +66,7 @@ const PETL: &str = "pet_left";
 const PETR: &str = "pet_right";
 
 
-
+#[derive(Debug,Clone)]
 struct DTIFse {
     /// determines the mode to compile the sequence in
     mode: Mode,
@@ -187,7 +187,7 @@ struct EventControllers {
     crush_right_x: GS,
 }
 
-#[derive(Clone)]
+#[derive(Clone,Debug)]
 enum Mode {
     /// used to acquire image support region for each echo to measure phase errors.
     /// The y-z FOV should match the size of the object to gather accurate phase information due to very low matrix size in y-z
@@ -433,7 +433,7 @@ impl Events {
 }
 
 impl PulseSequence for DTIFse {
-    fn compile(&self) -> SeqLoop {
+    fn compile(&self) -> (SeqLoop,Self) {
 
         let w = Waveforms::build(self);
         let e = EventControllers::build(self,&w);
@@ -505,7 +505,7 @@ impl PulseSequence for DTIFse {
         vl.set_rep_time(Time::ms(100)).unwrap();
 
         match self.mode {
-            Mode::Tune { .. } => vl, // return just the view loop
+            Mode::Tune { .. } => (vl,self.clone()), // return just the view loop
             Mode::Acq { .. } | Mode::Measure { .. } => { // return the view loop inside the experiment loop for diffusion encoding
                 let n_dx = e.diffusion_x.lut().unwrap().len();
                 let n_dy = e.diffusion_y.lut().unwrap().len();
@@ -516,7 +516,7 @@ impl PulseSequence for DTIFse {
                 el.add_loop(vl).unwrap();
                 el.set_pre_calc(Time::ms(1));
                 el.set_orientations(Orientations::new(&[[Angle::deg(0),Angle::deg(0),Angle::deg(0)]]));
-                el
+                (el,self.clone())
             },
         }
     }
@@ -562,8 +562,8 @@ fn main() {
     // build list of echo times to evaluate each b-matrix
     let mut t_echoes = vec![];
     // get the center of the first echo from the center of ACQ
-    t_echoes.extend(s.find_occurrences(ACQ,50));
-    t_echoes.extend(s.find_occurrences(ACQT,50));
+    t_echoes.extend(s.0.find_occurrences(ACQ,50));
+    t_echoes.extend(s.0.find_occurrences(ACQT,50));
 
     // print echo times
     for (i,echo) in t_echoes.iter().enumerate() {
@@ -621,7 +621,7 @@ fn main() {
     //params.mode = Mode::Acq { grad_table: grad_tab};
     sequence.mode = Mode::Measure {r:3,n_dummies:5,fov_y: sequence.fov_y_mm,fov_z: sequence.fov_z_mm, g_vectors: g_vectors.clone()};
 
-    compile_seq(&sequence.compile(), out_dir, "seq", false);
+    compile_seq(&sequence.compile().0, out_dir, "seq", false);
 
     sequence.mode = Mode::Tune {n:1};
     let mut adj = sequence.adjustment_state();

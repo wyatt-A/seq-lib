@@ -16,6 +16,7 @@ use crate::grad_pulses::{half_sin, ramp_up, trapezoid};
 use crate::PulseSequence;
 use crate::rf_pulses::sinc3;
 
+#[derive(Debug,Clone)]
 pub struct SSMEParams {
 
     n_samples: usize,
@@ -216,7 +217,7 @@ impl Default for SSMEParams {
 }
 
 impl PulseSequence for SSMEParams {
-    fn compile(&self) -> SeqLoop {
+    fn compile(&self) -> (SeqLoop,Self) {
 
         let waveforms = Waveforms::new(&self);
         let event_controllers = EventControllers::new(&self,&waveforms);
@@ -329,7 +330,7 @@ impl PulseSequence for SSMEParams {
 
         vl.set_rep_time(Time::ms(self.rep_time_ms)).unwrap();
 
-        vl
+        (vl,self.clone())
 
     }
 

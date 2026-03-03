@@ -30,7 +30,7 @@ pub fn load_bvecs(file:impl AsRef<Path>) -> (Vec<usize>,Vec<[f64;3]>) {
 pub fn grad_solve<P:PulseSequence>(p:&P, adj_var:&str, target_bval:f64, g_lower:FieldGrad, g_upper:FieldGrad, inv_pulses_labels:&[&str], echo_time:Time) -> FieldGrad {
 
     let mut adj_state = p.adjustment_state();
-    let s = p.compile();
+    let s = p.compile().0;
 
     // get the center point of each inversion pulse
     let mut inv_pulse_times:Vec<_> = inv_pulses_labels.iter().flat_map(|inv_pulse|{
@@ -62,7 +62,7 @@ pub fn grad_solve<P:PulseSequence>(p:&P, adj_var:&str, target_bval:f64, g_lower:
 }
 
 pub fn calc_b_matrix<P:PulseSequence>(p:&P, adj_state:&HashMap<String,f64>, inv_pulses_labels:&[&str], echo_time:Time, nucleus: Nucleus) -> BMat {
-    let s = p.compile();
+    let s = p.compile().0;
     // get the center point of each inversion pulse
     let mut inv_pulse_times:Vec<_> = inv_pulses_labels.iter().flat_map(|inv_pulse|{
         s.find_occurrences(inv_pulse,50).into_iter().map(|t|t.as_sec())

@@ -25,6 +25,7 @@ fn main() {
     rfc.render_to_file(&p,"rf_cal");
 }
 
+#[derive(Clone,Debug)]
 pub struct RfCal {
     slice_thickness_mm: f64,
     rf_dir_us: usize,
@@ -167,7 +168,7 @@ impl Default for RfCal {
 }
 
 impl PulseSequence for RfCal {
-    fn compile(&self) -> SeqLoop {
+    fn compile(&self) -> (SeqLoop,Self) {
 
         let el = EventLabels::new();
         let w = Waveforms::new(self);
@@ -196,7 +197,7 @@ impl PulseSequence for RfCal {
         vl.set_pre_calc(Time::ms(2));
         vl.set_rep_time(Time::ms(self.rep_time_ms)).unwrap();
 
-        vl
+        (vl,self.clone())
     }
 
     fn adjustment_state(&self) -> HashMap<String, f64> {
