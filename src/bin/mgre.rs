@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{FieldGrad, Freq, Length, Time};
 use mr_units::quantity::Unit;
+use mrs_ppl::compile::{build_seq, compile_seq};
 use pulse_seq_view::run_viewer;
 use seq_struct::acq_event::ACQEvent;
 use seq_struct::grad_strength::EventControl;
@@ -16,13 +17,24 @@ use seq_lib::grad_pulses::scale_factors::{HALF_SIN_SCALE, QUARTER_SIN_SCALE};
 
 fn main() {
 
-    let (sl,mgre) = Mgre::default().compile();
+    let mut mgre = Mgre::default();
+    mgre.sim_mode = false;
+    mgre.gop_mode = true;
+    mgre.n_read = 2_560;
+    mgre.n_phase_y = 204_800/3;
+    mgre.n_phase_z = 204_800/3;
+    mgre.fov_mm = [25.6,12.8,12.8];
+    mgre.echo_location = 0.4;
 
+    let (seq_loop,mgre) = mgre.compile();
     let user_state = mgre.adjustment_state();
-
-    let ps_data = sl.render_timeline(&user_state).to_raw_loop_range(1198,1199);
-
     println!("{:?}",mgre);
+
+
+    let out_dir = r"D:\dev\test\260303\mgre";
+    compile_seq(&seq_loop,out_dir,"mgre",true);
+    build_seq(out_dir)
+    //let ps_data = sl.render_timeline(&user_state).to_raw_loop_range(1198,1199);
 
     //run_viewer(ps_data).unwrap();
 
@@ -50,6 +62,10 @@ pub struct Mgre {
     pe_dur_us: f64,
     /// use smooth gradient shapes instead of linear ramps
     smooth_grad:bool,
+    /// when gain optimization is true, phase encoding is disabled
+    gop_mode:bool,
+    /// if sim mode is true, only 4 views will be calculated
+    sim_mode:bool,
     /// repetition time in milliseconds
     rep_time_ms: f64,
     /// post-alpha pulse delay in microseconds
@@ -71,22 +87,24 @@ pub struct Mgre {
 impl Default for Mgre {
     fn default() -> Self {
         Mgre {
-            fov_mm: [20.,12.,12.],
+            fov_mm: [20.,12.8,12.8],
             bandwidth_khz: 400.,
             n_read: 2000,
             n_phase_y: 1200,
-            n_phase_z: 1,
+            n_phase_z: 1200,
             rf_pulse_dur_us: 100.,
             ramp_time_us: 300.,
-            pe_dur_us: 500.,
-            echo_location: 0.1,
+            pe_dur_us: 2000.,
+            echo_location: 0.5,
             smooth_grad: true,
+            sim_mode: true,
+            gop_mode: true,
             rep_time_ms: 100.,
             post_alpha_del_us: 0.,
-            post_pe_del_us: 0.,
+            post_pe_del_us: 13.,
             post_ru_del_us: 50.,
             post_acq_del_us: 50.,
-            inter_readout_del_us: 0.,
+            inter_readout_del_us: 13.,
             te1_ms: None,
             te2_ms: None,
         }
@@ -99,7 +117,7 @@ impl PulseSequence for Mgre {
         let mut mgre = self.clone();
 
         let tr = Time::ms(self.rep_time_ms);
-        let pre_calc_time = Time::ms(2);
+        let pre_calc_time = Time::ms(4);
         let post_alpha_del = Time::us(self.post_alpha_del_us);
         let post_pe_del = Time::us(self.post_pe_del_us);
         let post_ro_ramp_del = Time::us(self.post_ru_del_us);
@@ -108,7 +126,13 @@ impl PulseSequence for Mgre {
 
         let e = Events::build(self);
 
-        let mut vl = SeqLoop::new_main(VIEW,self.n_phase_y*self.n_phase_z);
+        let n_views = if self.sim_mode {
+            4
+        }else {
+            self.n_phase_y*self.n_phase_z
+        };
+
+        let mut vl = SeqLoop::new_main(VIEW,n_views);
         // give 2 ms of calculation time for parameters
         vl.set_pre_calc(pre_calc_time);
 
@@ -180,6 +204,7 @@ impl PulseSequence for Mgre {
     fn adjustment_state(&self) -> HashMap<String, f64> {
         let mut s = HashMap::new();
         s.insert(RF_POWER.to_string(),1.0);
+        s.insert("gpre".to_string(),0.);
         s
     }
 }
@@ -279,12 +304,12 @@ impl EventControllers {
             Time::us(mgre.pe_dur_us + mgre.ramp_time_us)
         }else {
             // half-sin gradient
-            Time::us(mgre.pe_dur_us * HALF_SIN_SCALE)
+            Time::us(mgre.pe_dur_us / HALF_SIN_SCALE)
         };
 
         // effective ramp time (shorter for smooth ramps)
         let t_ramp = if mgre.smooth_grad {
-            Time::us(mgre.ramp_time_us * QUARTER_SIN_SCALE)
+            Time::us(mgre.ramp_time_us / QUARTER_SIN_SCALE)
         }else {
             Time::us(mgre.ramp_time_us)
         };
@@ -310,11 +335,16 @@ impl EventControllers {
         // second echo readout
         let c_gro2 = EventControl::<FieldGrad>::new().with_constant_grad(gro.scale(-1)).to_shared();
         // pre-phasing
-        let c_gpe_x = EventControl::<FieldGrad>::new().with_constant_grad(gpe_x).to_shared();
+        let c_gpe_x = EventControl::<FieldGrad>::new().with_constant_grad(gpe_x).with_adj("gpre").to_shared();
 
         // phase encoding steps for y and z axes
-        let pe_steps_y:Vec<i32> = (0..mgre.n_phase_y).map(|step| step as i32).map(|step| step - mgre.n_phase_y as i32  / 2).collect();
-        let pe_steps_z:Vec<i32> = (0..mgre.n_phase_z).map(|step| step as i32).map(|step| step - mgre.n_phase_z as i32  / 2).collect();
+        let mut pe_steps_y:Vec<i32> = (0..mgre.n_phase_y).map(|step| step as i32).map(|step| step - mgre.n_phase_y as i32  / 2).collect();
+        let mut pe_steps_z:Vec<i32> = (0..mgre.n_phase_z).map(|step| step as i32).map(|step| step - mgre.n_phase_z as i32  / 2).collect();
+
+        if mgre.gop_mode {
+            pe_steps_y.fill(0);
+            pe_steps_z.fill(0);
+        }
 
         let lut_pe_y = LUT::new("pe_y_lut",&pe_steps_y).to_shared();
         let lut_pe_z = LUT::new("pe_z_lut",&pe_steps_z).to_shared();
