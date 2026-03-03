@@ -17,31 +17,31 @@ use seq_lib::grad_pulses::scale_factors::{HALF_SIN_SCALE, QUARTER_SIN_SCALE};
 
 fn main() {
 
-    let mut mgre = Mgre::default();
+    let mut mgre = Gre::default();
     mgre.sim_mode = false;
-    mgre.gop_mode = true;
+    mgre.gop_mode = false;
+    mgre.smooth_grad = true;
     mgre.n_read = 2_560;
-    mgre.n_phase_y = 204_800/3;
-    mgre.n_phase_z = 204_800/3;
+    mgre.n_phase_y = 1;
+    mgre.n_phase_z = 1280;
     mgre.fov_mm = [25.6,12.8,12.8];
-    mgre.echo_location = 0.4;
+    mgre.echo_location = 0.5;
 
     let (seq_loop,mgre) = mgre.compile();
     let user_state = mgre.adjustment_state();
     println!("{:?}",mgre);
 
+    // let out_dir = r"D:\dev\test\260303\mgre";
+    // compile_seq(&seq_loop,out_dir,"mgre",true);
+    // build_seq(out_dir)
+    let ps_data = seq_loop.render_timeline(&user_state).to_raw_loop_range(0,1);
 
-    let out_dir = r"D:\dev\test\260303\mgre";
-    compile_seq(&seq_loop,out_dir,"mgre",true);
-    build_seq(out_dir)
-    //let ps_data = sl.render_timeline(&user_state).to_raw_loop_range(1198,1199);
-
-    //run_viewer(ps_data).unwrap();
+    run_viewer(ps_data).unwrap();
 
 }
 
 #[derive(Debug,Clone)]
-pub struct Mgre {
+pub struct Gre {
     /// field of view in mm
     fov_mm: [f64;3],
     /// receiver bandwidth in kHz
@@ -79,14 +79,14 @@ pub struct Mgre {
     /// delay between readout gradients
     inter_readout_del_us: f64,
     /// calculated echo 1 time
-    te1_ms: Option<f64>,
+    te_ms: Option<f64>,
     /// calculated echo 2 time
     te2_ms: Option<f64>,
 }
 
-impl Default for Mgre {
+impl Default for Gre {
     fn default() -> Self {
-        Mgre {
+        Gre {
             fov_mm: [20.,12.8,12.8],
             bandwidth_khz: 400.,
             n_read: 2000,
@@ -105,16 +105,16 @@ impl Default for Mgre {
             post_ru_del_us: 50.,
             post_acq_del_us: 50.,
             inter_readout_del_us: 13.,
-            te1_ms: None,
+            te_ms: None,
             te2_ms: None,
         }
     }
 }
 
-impl PulseSequence for Mgre {
+impl PulseSequence for Gre {
     fn compile(&self) -> (SeqLoop,Self) {
 
-        let mut mgre = self.clone();
+        let mut gre = self.clone();
 
         let tr = Time::ms(self.rep_time_ms);
         let pre_calc_time = Time::ms(4);
@@ -142,44 +142,32 @@ impl PulseSequence for Mgre {
         vl.add_event(e.e_ro_ru).unwrap();
         vl.add_event(e.e_acq).unwrap();
         vl.add_event(e.e_ro_rd).unwrap();
-        vl.add_event(e.e_ro_ru2).unwrap();
-        vl.add_event(e.e_acq2).unwrap();
-        vl.add_event(e.e_ro_rd2).unwrap();
 
         // end of alpha pulse to start of phase encoding
         if let Ok(time) = vl.set_min_time_span(Events::alpha(),Events::pe(),100,0,post_alpha_del) {
-            mgre.post_alpha_del_us = time.as_us();
-            println!("set post-alpha delay to {:?} us",mgre.post_alpha_del_us);
+            gre.post_alpha_del_us = time.as_us();
+            println!("set post-alpha delay to {:?} us", gre.post_alpha_del_us);
         }else {
             panic!("failed to set post-alpha delay");
         }
 
         if let Ok(time) = vl.set_min_time_span(Events::pe(),Events::ro_ru(),100,0,post_pe_del) {
-            mgre.post_pe_del_us = time.as_us();
-            println!("set post-phase encode delay to {:?} us",mgre.post_pe_del_us);
+            gre.post_pe_del_us = time.as_us();
+            println!("set post-phase encode delay to {:?} us", gre.post_pe_del_us);
         }
 
         if let Ok(time) = vl.set_min_time_span(Events::ro_ru(),Events::acq(),100,0,post_ro_ramp_del) {
-            mgre.post_ru_del_us = time.as_us();
-            println!("set post-readout ramp delay to {:?} us",mgre.post_ru_del_us);
+            gre.post_ru_del_us = time.as_us();
+            println!("set post-readout ramp delay to {:?} us", gre.post_ru_del_us);
         }
 
         if let Ok(time) = vl.set_min_time_span(Events::acq(),Events::ro_rd(),100,0,post_acq_del) {
-            mgre.post_acq_del_us = time.as_us();
-            println!("set post-acq delay to {:?} us",mgre.post_acq_del_us);
+            gre.post_acq_del_us = time.as_us();
+            println!("set post-acq delay to {:?} us", gre.post_acq_del_us);
         }
-
-        if let Ok(time) = vl.set_min_time_span(Events::ro_rd(),Events::ro_ru2(),100,0,inter_readout_del) {
-            mgre.inter_readout_del_us = time.as_us();
-            println!("set inter-readout delay to {:?} us",mgre.inter_readout_del_us);
-        }
-
-        vl.set_min_time_span(Events::ro_ru2(),Events::acq2(),100,0,post_ro_ramp_del).unwrap();
-        vl.set_min_time_span(Events::acq2(),Events::ro_rd2(),100,0,post_acq_del).unwrap();
 
         vl.set_averages(1);
         vl.set_rep_time(tr).unwrap();
-
 
         // calculate echo times
         // time from center of alpha pulse to end of readout ramp up
@@ -187,17 +175,10 @@ impl PulseSequence for Mgre {
         let t1 = vl.get_time_span(Events::alpha(),Events::ro_rd(),50,0).unwrap();
         // first echo forms between ru and rd, parameterized by echo location
         let te1 = (t1.as_ms() - t0.as_ms()) * self.echo_location + t0.as_ms();
-        mgre.te1_ms = Some(te1);
-
-        let t0 = vl.get_time_span(Events::alpha(),Events::ro_ru2(),50,100).unwrap();
-        let t1 = vl.get_time_span(Events::alpha(),Events::ro_rd2(),50,0).unwrap();
-        // second echo forms between ru2 and rd2, parameterized by 1 - echo location due to inverted
-        // gradient polarity
-        let te2 = (t1.as_ms() - t0.as_ms()) * (1. - self.echo_location) + t0.as_ms();
-        mgre.te2_ms = Some(te2);
+        gre.te_ms = Some(te1);
 
         // return loop and modified parameters
-        (vl,mgre)
+        (vl, gre)
 
     }
 
@@ -221,7 +202,7 @@ struct Waveforms {
 }
 
 impl Waveforms {
-    fn build(mgre: &Mgre) -> Waveforms {
+    fn build(mgre: &Gre) -> Waveforms {
         let rf_dt = Time::us(2);
         let grad_dt = Time::us(2);
 
@@ -282,7 +263,6 @@ impl Waveforms {
 
 struct EventControllers {
     c_gro: GS,
-    c_gro2: GS,
     c_gpe_x: GS,
     c_gpe_y: GS,
     c_gpe_z: GS,
@@ -290,7 +270,7 @@ struct EventControllers {
 }
 
 impl EventControllers {
-    fn build(mgre: &Mgre) -> EventControllers {
+    fn build(mgre: &Gre) -> EventControllers {
 
         let nuc = Nuc1H;
         let fov_x = Length::mm(mgre.fov_mm[0]);
@@ -300,16 +280,16 @@ impl EventControllers {
 
         // effective phase encode time (shorter for half-sin lobe)
         let pe_dt = if mgre.smooth_grad {
+            // half-sin gradient
+            Time::us(mgre.pe_dur_us * HALF_SIN_SCALE)
+        }else {
             // trapezoidal gradient
             Time::us(mgre.pe_dur_us + mgre.ramp_time_us)
-        }else {
-            // half-sin gradient
-            Time::us(mgre.pe_dur_us / HALF_SIN_SCALE)
         };
 
         // effective ramp time (shorter for smooth ramps)
         let t_ramp = if mgre.smooth_grad {
-            Time::us(mgre.ramp_time_us / QUARTER_SIN_SCALE)
+            Time::us(mgre.ramp_time_us * QUARTER_SIN_SCALE)
         }else {
             Time::us(mgre.ramp_time_us)
         };
@@ -330,10 +310,8 @@ impl EventControllers {
         // prephase lobe strength
         let gpe_x:FieldGrad = (pe_moment / pe_dt).try_into().unwrap();
 
-        // first echo readout
+        // echo readout
         let c_gro = EventControl::<FieldGrad>::new().with_constant_grad(gro).to_shared();
-        // second echo readout
-        let c_gro2 = EventControl::<FieldGrad>::new().with_constant_grad(gro.scale(-1)).to_shared();
         // pre-phasing
         let c_gpe_x = EventControl::<FieldGrad>::new().with_constant_grad(gpe_x).with_adj("gpre").to_shared();
 
@@ -370,7 +348,6 @@ impl EventControllers {
 
         EventControllers {
             c_gro,
-            c_gro2,
             c_gpe_x,
             c_gpe_y,
             c_gpe_z,
@@ -385,18 +362,12 @@ struct Events {
     e_pe: GradEvent,
     e_ro_ru: GradEvent,
     e_ro_rd: GradEvent,
-
-    e_ro_ru2: GradEvent,
-    e_ro_rd2: GradEvent,
-
     e_acq: ACQEvent,
-
-    e_acq2: ACQEvent,
 }
 
 impl Events {
 
-    fn build(mgre: &Mgre) -> Events {
+    fn build(mgre: &Gre) -> Events {
         let w = Waveforms::build(mgre);
         let ec = EventControllers::build(mgre);
         let e_alpha = RfEvent::new(Events::alpha(),&w.rf,&ec.c_rfp);
@@ -407,23 +378,14 @@ impl Events {
         // readout ramps for echo 1
         let e_ro_ru = GradEvent::new(Events::ro_ru()).with_x(&w.ru).with_strength_x(&ec.c_gro);
         let e_ro_rd = GradEvent::new(Events::ro_rd()).with_x(&w.rd).with_strength_x(&ec.c_gro);
-
-        // readout ramps for echo 2
-        let e_ro_ru2 = GradEvent::new(Events::ro_ru2()).with_x(&w.ru).with_strength_x(&ec.c_gro2);
-        let e_ro_rd2 = GradEvent::new(Events::ro_rd2()).with_x(&w.rd).with_strength_x(&ec.c_gro2);
-
         let e_acq = ACQEvent::new(Events::acq(),mgre.n_read,Freq::khz(mgre.bandwidth_khz).inv());
-        let e_acq2 = e_acq.clone().set_label(Events::acq2());
 
         Events {
             e_alpha,
             e_pe,
             e_ro_ru,
             e_ro_rd,
-            e_ro_ru2,
-            e_ro_rd2,
             e_acq,
-            e_acq2,
         }
     }
 
@@ -443,21 +405,10 @@ impl Events {
         "ro_rd"
     }
 
-    fn ro_ru2() -> &'static str {
-        "ro_ru2"
-    }
-
-    fn ro_rd2() -> &'static str {
-        "ro_rd2"
-    }
-
     fn acq() -> &'static str {
         "acq"
     }
 
-    fn acq2() -> &'static str {
-        "acq2"
-    }
 }
 
 
