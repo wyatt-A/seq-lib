@@ -3,7 +3,7 @@ use clap::Parser;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{Angle, FieldGrad, Freq, Length, Time};
 use mr_units::quantity::Unit;
-use mrs_ppl::compile::{build_seq, compile_seq};
+use mrs_ppl::compile;
 use seq_struct::acq_event::ACQEvent;
 use seq_struct::grad_strength::EventControl;
 use seq_struct::gradient_event::GradEvent;

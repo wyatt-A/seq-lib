@@ -1,9 +1,7 @@
 pub mod rf_pulses;
 pub mod grad_pulses;
-pub mod se3d;
-pub mod ssme;
 pub mod q_calc;
-pub mod rf_cal;
+
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

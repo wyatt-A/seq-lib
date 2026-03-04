@@ -19,7 +19,7 @@ use seq_struct::waveform::Waveform;
 use seq_lib::grad_pulses::{ramp_down, ramp_up, trapezoid};
 use seq_lib::PulseSequence;
 use seq_lib::rf_pulses::{hardpulse, hardpulse_composite};
-use mrs_ppl::compile::{compile_seq};
+use mrs_ppl::compile::{build_ppl};
 use seq_lib::q_calc::{calc_b_matrix, grad_solve, load_bvecs};
 use rayon::prelude::*;
 
@@ -621,7 +621,7 @@ fn main() {
     //params.mode = Mode::Acq { grad_table: grad_tab};
     sequence.mode = Mode::Measure {r:3,n_dummies:5,fov_y: sequence.fov_y_mm,fov_z: sequence.fov_z_mm, g_vectors: g_vectors.clone()};
 
-    compile_seq(&sequence.compile().0, out_dir, "seq", false);
+    build_ppl(&sequence.compile().0, out_dir, "seq", false);
 
     sequence.mode = Mode::Tune {n:1};
     let mut adj = sequence.adjustment_state();

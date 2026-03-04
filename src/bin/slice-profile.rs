@@ -3,7 +3,8 @@ use std::rc::Rc;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{Angle, FieldGrad, Freq, Length, Time};
 use mr_units::quantity::Unit;
-use mrs_ppl::compile::{build_seq, compile_seq};
+use mrs_ppl::compile;
+use mrs_ppl::compile::{build_ppl, compile_ppl};
 use seq_struct::acq_event::ACQEvent;
 use seq_struct::grad_strength::EventControl;
 use seq_struct::gradient_event::GradEvent;
@@ -36,8 +37,8 @@ const ACQ: &str = "acq";
 fn main() {
     let sp = SliceProfile::default();
     let s = sp.compile();
-    compile_seq(&s.0,r"C:\Users\MRS\seq-lib\test_out","out",false);
-    build_seq(r"C:\Users\MRS\seq-lib\test_out");
+    build_ppl(&s.0,r"C:\Users\MRS\seq-lib\test_out","out",false);
+    compile_ppl(r"C:\Users\MRS\seq-lib\test_out");
     // let p = sp.adjustment_state();
     // sp.render_to_file(&p,"slice_profile");
 }
