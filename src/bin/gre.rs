@@ -1,10 +1,15 @@
 use std::collections::HashMap;
 use std::fs::{read_to_string};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use array_lib::{ArrayDim, NormSqr};
+use array_lib::io_nifti::write_nifti;
+use dft_lib::common::{FftDirection, NormalizationType};
+use dft_lib::rs_fft::rs_fftn_batched;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{FieldGrad, Freq, Length, Time};
 use mr_units::quantity::Unit;
-use mrs_ppl::compile::{build_ppl, compile_ppl};
+use mrs_ppl::compile::{build_ppl,compile_ppl};
+use num_complex::Complex32;
 use pulse_seq_view::run_viewer;
 use seq_struct::acq_event::ACQEvent;
 use seq_struct::grad_strength::EventControl;
@@ -17,6 +22,135 @@ use seq_lib::grad_pulses::{half_sin, quarter_sin_rd, quarter_sin_ru, ramp_down, 
 use seq_lib::{rf_pulses, PulseSequence};
 use seq_lib::grad_pulses::scale_factors::{HALF_SIN_SCALE, QUARTER_SIN_SCALE};
 
+/// format and analyze k-space data for recon. This fills in extra parameters
+fn format_acquisition(mrd_file:impl AsRef<Path>, out_cfl:impl AsRef<Path>, gre:&mut Gre) {
+
+    // size of gridded data set
+    let vol_data_dims = ArrayDim::from_shape(
+        &[
+            gre.matrix_size[0],
+            gre.matrix_size[1],
+            gre.matrix_size[2],
+            gre.n_pspace_samples
+        ]
+    );
+
+    // expected size of raw data from mrd file
+    let raw_data_dims = ArrayDim::from_shape(
+        &[
+            gre.matrix_size[0],
+            gre.n_phase_y.unwrap(),
+            gre.n_pspace_samples,
+        ]
+    );
+
+    let (raw_data, mrd_size, ..) = array_lib::io_mrd::read_mrd(mrd_file);
+    assert_eq!(raw_data_dims.shape_squeeze(),mrd_size.shape_squeeze(),"unexpected raw data dimensions");
+
+    // parse phase encode table
+    let pe_table = gre.pe_table.as_ref().unwrap();
+    let pe_table_str = read_to_string(pe_table).unwrap();
+    let lines:Vec<&str> =  pe_table_str.lines().collect();
+    let pe_table:Vec<[isize;2]> = lines.chunks_exact(2).map(|pair|{
+        let y = pair[0].parse::<isize>().expect("failed to parse coordinate");
+        let z = pair[1].parse::<isize>().expect("failed to parse coordinate");
+        [y,z]
+    }).collect();
+
+    // allocate output data
+    let mut vol_data = vol_data_dims.alloc(Complex32::ZERO);
+
+    // find DC samples to determine echo times and spacings
+    let mut dc_coords = vec![[0isize;3];gre.n_pspace_samples];
+    let mut max_energy = vec![0f32;gre.n_pspace_samples];
+
+    // grid raw data based on pe table
+    let n_per_vol = raw_data_dims.shape()[0]*raw_data_dims.shape()[1];
+    let n_per_line = raw_data_dims.shape()[0];
+    // loop over echo data
+    raw_data.chunks_exact(n_per_vol).enumerate().for_each(|(echo_idx,x)|{
+        // loop over k-space lines
+        x.chunks_exact(n_per_line).zip(pe_table.iter()).for_each(|(ksp_line,&[y,z])|{
+            // loop over k-space samples
+            ksp_line.iter().enumerate().for_each(|(x,sample)| {
+                // record max energy sample and location
+                if sample.norm_sqr() > max_energy[echo_idx] {
+                    max_energy[echo_idx] = sample.norm_sqr();
+                    dc_coords[echo_idx] = [x as isize,y,z];
+                }
+                // calculate address for k-space sample, and write into array
+                let addr = vol_data_dims.calc_addr_signed(&[x as isize,y,z,echo_idx as isize]);
+                vol_data[addr] = *sample;
+            })
+        })
+    });
+
+    let dwell_time = Freq::khz(gre.bandwidth_khz).inv();
+    let te = gre.acq_start_ms.unwrap() + dwell_time.scale(dc_coords[0][0]).as_ms();
+    let t_deltas = dc_coords.windows(2).enumerate().map(|(i,pair)|{
+        // calculate sample difference between p-space samples
+        let diff = pair[1][0] - pair[0][0];
+        println!("echo diff {}: {diff} samples",i+1);
+        dwell_time.scale(diff).as_ms()
+    }).collect::<Vec<f64>>();
+
+    println!("te_measured: {}",te);
+    println!("t_deltas: {:#?}",t_deltas);
+
+    gre.delta_te_measured_ms = Some(t_deltas);
+    gre.te_measured_ms = Some(te);
+
+
+    // set dc samples to first index of volume to be consistent with ifft
+
+    // dims for single volume
+
+    println!("shifting k-space for first-order phase correction");
+    let vol_dim = ArrayDim::from_shape(&vol_data_dims.shape()[0..3]);
+    let mut tmp_dst = vol_dim.alloc(Complex32::ZERO);
+    vol_data.chunks_exact_mut(vol_dim.numel()).enumerate().for_each(|(echo_idx,vol)|{
+        // reverse-shift
+        let shift = [
+            -dc_coords[echo_idx][0],
+            -dc_coords[echo_idx][1],
+            -dc_coords[echo_idx][2]
+        ];
+        // circshift vol into tmp, then write tmp back into vol
+        tmp_dst.fill(Complex32::ZERO);
+        vol_dim.circshift(&shift,vol,&mut tmp_dst);
+        vol.copy_from_slice(&tmp_dst);
+    });
+
+    println!("writing ksp cfl");
+    array_lib::io_cfl::write_cfl(&out_cfl,&vol_data,vol_data_dims);
+
+    // do quick fft recon
+    rs_fftn_batched(&mut vol_data,&vol_dim.shape_squeeze(),gre.n_pspace_samples,FftDirection::Inverse,NormalizationType::Unitary);
+
+    // fft shift volumes
+    vol_data.chunks_exact_mut(vol_dim.numel()).for_each(|vol|{
+        // fftshift vol into tmp, then write tmp back into vol
+        tmp_dst.fill(Complex32::ZERO);
+        vol_dim.fftshift(&vol,&mut tmp_dst,true);
+        vol.copy_from_slice(&tmp_dst);
+    });
+
+    println!("writing image cfl");
+    let out_img = out_cfl.as_ref().with_file_name("img.cfl");
+    array_lib::io_cfl::write_cfl(out_img,&vol_data,vol_data_dims);
+
+    println!("writing phase images");
+    vol_data.chunks_exact(vol_dim.numel()).enumerate().for_each(|(i,vol)|{
+        let out_img = out_cfl.as_ref().with_file_name(format!("te_{i}.nii"));
+        println!("{}",out_img.display());
+        let phase:Vec<_> = vol.iter().map(|x| x.to_polar().1).collect();
+        write_nifti(out_img,&phase,vol_dim);
+    });
+
+
+}
+
+
 fn main() {
 
     // 50um attempt
@@ -26,8 +160,8 @@ fn main() {
     gre.gop_mode = false;
     gre.smooth_grad = true;
     gre.bandwidth_khz = 50.;
-    gre.n_read = 512;
-    gre.cs_table = Some(PathBuf::from(r"C:\workstation\data\petableCS_stream\stream_CS256_8x_pa18_pb54"));
+    gre.matrix_size = [512,256,256];
+    gre.pe_table = Some(PathBuf::from(r"/Users/Wyatt/scratch/mgre/stream_CS256_8x_pa18_pb54"));
     gre.fov_mm = [25.6,12.8,12.8];
     gre.echo_location = 0.1;
     gre.pe_dur_us = 1000.;
@@ -35,33 +169,40 @@ fn main() {
     gre.pspace_step_size_mtpm = -100.;
     gre.rep_time_ms = 30.;
 
-    let (seq_loop,gre) = gre.compile();
+    let (seq_loop,mut gre) = gre.compile();
     let user_state = gre.adjustment_state();
     println!("{:?}",gre);
 
-    let out_dir = r"D:\dev\test\260303\mgre";
-    build_ppl(&seq_loop,out_dir,"mgre",true);
-    compile_ppl(out_dir);
+    //let out_dir = r"D:\dev\test\260303\mgre";
+    //build_ppl(&seq_loop,out_dir,"mgre",true);
+    //compile_ppl(out_dir);
+
+    format_acquisition("/Users/Wyatt/scratch/mgre/out.mrd", "/Users/Wyatt/scratch/mgre/out.cfl", &mut gre);
 
     // let ps_data = seq_loop.render_timeline(&user_state).to_raw();
     // run_viewer(ps_data).unwrap();
 
 }
 
+
+
+
+
+
 #[derive(Debug,Clone)]
 pub struct Gre {
     /// field of view in mm
     fov_mm: [f64;3],
+    /// size of acquisition grid where `matrix[0]` is the number of readout samples
+    matrix_size: [usize;3],
     /// number of p-space samples to acquire multiple echo times
     n_pspace_samples: usize,
     /// step size to modulate the pre-phase gradient in millitesla per meter
     pspace_step_size_mtpm: f64,
     /// receiver bandwidth in kHz
     bandwidth_khz: f64,
-    /// number of readout samples
-    n_read: usize,
     /// path to cs table with index entries `[y0,z0,y1,z1...etc.]`
-    cs_table: Option<PathBuf>,
+    pe_table: Option<PathBuf>,
     /// number of phase encoding samples along y
     n_phase_y: Option<usize>,
     /// number of phase encoding samples along z
@@ -91,20 +232,26 @@ pub struct Gre {
     /// delay after acquisition, before ramp down
     post_acq_del_us: f64,
     /// estimated echo time
-    te_ms: Option<f64>,
+    te_estimate_ms: Option<f64>,
     /// gradient strength limit
     grad_limit_tpm: f64,
+    /// time delta between center of rf pulse and start of ADC
+    acq_start_ms: Option<f64>,
+    /// measured time between echoes acquired across p-space
+    delta_te_measured_ms: Option<Vec<f64>>,
+    /// measured time of first echo based on dc sample and acq_start
+    te_measured_ms: Option<f64>,
 }
 
 impl Default for Gre {
     fn default() -> Self {
         Gre {
             fov_mm: [20.,12.8,12.8],
+            matrix_size: [512,256,256],
             n_pspace_samples: 3,
             pspace_step_size_mtpm: 1.,
             bandwidth_khz: 50.,
-            n_read: 128,
-            cs_table: None,
+            pe_table: None,
             n_phase_y: None,
             n_phase_z: None,
             rf_pulse_dur_us: 100.,
@@ -119,8 +266,11 @@ impl Default for Gre {
             post_pe_del_us: 13.,
             post_ru_del_us: 50.,
             post_acq_del_us: 50.,
-            te_ms: None,
+            te_estimate_ms: None,
+            acq_start_ms: None,
             grad_limit_tpm: 2.0,
+            delta_te_measured_ms: None,
+            te_measured_ms: None,
         }
     }
 }
@@ -188,13 +338,17 @@ impl PulseSequence for Gre {
         vl.set_averages(1);
         vl.set_rep_time(tr).unwrap();
 
+        // record the start time of the first sample relative to the center of the excitation pulse
+        gre.acq_start_ms = Some(vl.get_time_span(Events::alpha(),Events::acq(),50,0).unwrap().as_ms());
+
+
         // calculate echo times
         // time from center of alpha pulse to end of readout ramp up
         let t0 = vl.get_time_span(Events::alpha(),Events::ro_ru(),50,100).unwrap();
         let t1 = vl.get_time_span(Events::alpha(),Events::ro_rd(),50,0).unwrap();
         // first echo forms between ru and rd, parameterized by echo location
         let te1 = (t1.as_ms() - t0.as_ms()) * self.echo_location + t0.as_ms();
-        gre.te_ms = Some(te1);
+        gre.te_estimate_ms = Some(te1);
 
         expl.add_loop(vl).unwrap();
         expl.set_pre_calc(Time::us(50));
@@ -332,7 +486,7 @@ impl EventControllers {
         let echo_location = gre.echo_location.clamp(0., 1.);
 
         // readout moment
-        let ro_time:Time = (s_dt.scale(gre.n_read) + t_ramp).try_into().unwrap();
+        let ro_time:Time = (s_dt.scale(gre.matrix_size[0]) + t_ramp).try_into().unwrap();
         let ro_moment = ro_time * gro;
 
         let pe_moment = - ro_moment * echo_location;
@@ -356,7 +510,7 @@ impl EventControllers {
 
         // phase encoding steps for y and z axes
 
-        let s = read_to_string(gre.cs_table.as_ref().expect("cs table must be defined")).expect("invalid cs table file");
+        let s = read_to_string(gre.pe_table.as_ref().expect("cs table must be defined")).expect("invalid cs table file");
         let cs_samples:Vec<i32> = s.lines().map(|idx| idx.parse::<i32>()
             .expect("failed to parse cs table")).collect();
 
@@ -435,7 +589,7 @@ impl Events {
         // readout ramps for echo 1
         let e_ro_ru = GradEvent::new(Events::ro_ru()).with_x(&w.ru).with_strength_x(&ec.c_gro);
         let e_ro_rd = GradEvent::new(Events::ro_rd()).with_x(&w.rd).with_strength_x(&ec.c_gro);
-        let e_acq = ACQEvent::new(Events::acq(),mgre.n_read,Freq::khz(mgre.bandwidth_khz).inv());
+        let e_acq = ACQEvent::new(Events::acq(),mgre.matrix_size[0],Freq::khz(mgre.bandwidth_khz).inv());
 
         Events {
             e_alpha,
