@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::fs::{read_to_string};
+use std::path::PathBuf;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{FieldGrad, Freq, Length, Time};
 use mr_units::quantity::Unit;
-use mrs_ppl::compile::{build_ppl,compile_ppl};
+use mrs_ppl::compile::{build_ppl, compile_ppl};
 use pulse_seq_view::run_viewer;
 use seq_struct::acq_event::ACQEvent;
 use seq_struct::grad_strength::EventControl;
@@ -17,31 +19,32 @@ use seq_lib::grad_pulses::scale_factors::{HALF_SIN_SCALE, QUARTER_SIN_SCALE};
 
 fn main() {
 
+    // 50um attempt
+
     let mut gre = Gre::default();
     gre.sim_mode = false;
-    gre.gop_mode = true;
+    gre.gop_mode = false;
     gre.smooth_grad = true;
-    gre.n_read = 2560;
-    gre.n_phase_y = 1;
-    gre.n_phase_z = 1;
+    gre.bandwidth_khz = 50.;
+    gre.n_read = 512;
+    gre.cs_table = Some(PathBuf::from(r"C:\workstation\data\petableCS_stream\stream_CS256_8x_pa18_pb54"));
     gre.fov_mm = [25.6,12.8,12.8];
-    gre.echo_location = 0.2;
+    gre.echo_location = 0.1;
     gre.pe_dur_us = 1000.;
     gre.n_pspace_samples = 2;
-    gre.pspace_step_size_mtpm = 100.;
-    gre.rep_time_ms = 15.;
+    gre.pspace_step_size_mtpm = -100.;
+    gre.rep_time_ms = 30.;
 
-    let (seq_loop,mgre) = gre.compile();
-    let user_state = mgre.adjustment_state();
-    println!("{:?}",mgre);
+    let (seq_loop,gre) = gre.compile();
+    let user_state = gre.adjustment_state();
+    println!("{:?}",gre);
 
-    // let out_dir = r"D:\dev\test\260303\mgre";
-    // compile_seq(&seq_loop,out_dir,"mgre",true);
-    // build_seq(out_dir)
-    //let ps_data = seq_loop.render_timeline(&user_state).to_raw_loop_range(0,3);
-    let ps_data = seq_loop.render_timeline(&user_state).to_raw();
+    let out_dir = r"D:\dev\test\260303\mgre";
+    build_ppl(&seq_loop,out_dir,"mgre",true);
+    compile_ppl(out_dir);
 
-    run_viewer(ps_data).unwrap();
+    // let ps_data = seq_loop.render_timeline(&user_state).to_raw();
+    // run_viewer(ps_data).unwrap();
 
 }
 
@@ -57,10 +60,12 @@ pub struct Gre {
     bandwidth_khz: f64,
     /// number of readout samples
     n_read: usize,
+    /// path to cs table with index entries `[y0,z0,y1,z1...etc.]`
+    cs_table: Option<PathBuf>,
     /// number of phase encoding samples along y
-    n_phase_y: usize,
+    n_phase_y: Option<usize>,
     /// number of phase encoding samples along z
-    n_phase_z: usize,
+    n_phase_z: Option<usize>,
     /// relative location of gradient echo (0.5 is center in ro)
     echo_location: f64,
     /// duration of rf pulse in microseconds
@@ -97,10 +102,11 @@ impl Default for Gre {
             fov_mm: [20.,12.8,12.8],
             n_pspace_samples: 3,
             pspace_step_size_mtpm: 1.,
-            bandwidth_khz: 400.,
-            n_read: 2000,
-            n_phase_y: 1200,
-            n_phase_z: 1200,
+            bandwidth_khz: 50.,
+            n_read: 128,
+            cs_table: None,
+            n_phase_y: None,
+            n_phase_z: None,
             rf_pulse_dur_us: 100.,
             ramp_time_us: 300.,
             pe_dur_us: 2000.,
@@ -131,12 +137,16 @@ impl PulseSequence for Gre {
         let post_ro_ramp_del = Time::us(self.post_ru_del_us);
         let post_acq_del = Time::us(self.post_acq_del_us);
 
-        let e = Events::build(self);
+        let e = Events::build(&mut gre);
 
         let n_views = if self.sim_mode {
-            4
+            10
         }else {
-            self.n_phase_y*self.n_phase_z
+            // default to 4 views if the number of phase encoding steps has not been set
+            let n_phase_y = gre.n_phase_y.unwrap_or(2);
+            let n_phase_z = gre.n_phase_z.unwrap_or(2);
+            assert_eq!(n_phase_y, n_phase_z);
+            n_phase_y
         };
 
         let mut expl = SeqLoop::new(EXPERIMENT,self.n_pspace_samples);
@@ -187,7 +197,8 @@ impl PulseSequence for Gre {
         gre.te_ms = Some(te1);
 
         expl.add_loop(vl).unwrap();
-        expl.no_overhead();
+        expl.set_pre_calc(Time::us(50));
+        //expl.no_overhead();
 
         // return loop and modified parameters
         (expl, gre)
@@ -282,7 +293,7 @@ struct EventControllers {
 }
 
 impl EventControllers {
-    fn build(gre: &Gre) -> EventControllers {
+    fn build(gre: &mut Gre) -> EventControllers {
 
         let nuc = Nuc1H;
         let fov_x = Length::mm(gre.fov_mm[0]);
@@ -290,8 +301,8 @@ impl EventControllers {
         let fov_z = Length::mm(gre.fov_mm[2]);
         let s_dt:Time = Freq::khz(gre.bandwidth_khz).inv().into();
 
+        // p_space index steps. This will be multiplied by a gradient strength and added to the pre-phase lobe
         let p_space_steps:Vec<i32> = (0..gre.n_pspace_samples).map(|p| p as i32).collect();
-
 
         // effective phase encode time (shorter for half-sin lobe)
         let pe_dt = if gre.smooth_grad {
@@ -314,12 +325,8 @@ impl EventControllers {
         assert!(gro.si().abs() <= gre.grad_limit_tpm, "gro exceeds max gradient strength: {}",gro.si());
 
         let gpe_y = FieldGrad::from_fov(fov_y,pe_dt,nuc);
-        let gpe_y_max = gpe_y.scale(gre.n_phase_y/2);
-        assert!(gpe_y_max.si().abs() <= gre.grad_limit_tpm, "gpy exceeds max gradient strength: {}",gpe_y_max.si());
 
         let gpe_z = FieldGrad::from_fov(fov_z,pe_dt,nuc);
-        let gpe_z_max = gpe_z.scale(gre.n_phase_z/2);
-        assert!(gpe_z_max.si().abs() <= gre.grad_limit_tpm, "gpz exceeds max gradient strength: {}",gpe_z_max.si());
 
         // echo location coefficient (between 0 and 1). This scales the pre-phase gradient lobe
         let echo_location = gre.echo_location.clamp(0., 1.);
@@ -329,13 +336,9 @@ impl EventControllers {
         let ro_moment = ro_time * gro;
 
         let pe_moment = - ro_moment * echo_location;
+
         // base prephase lobe strength
         let gpe_x:FieldGrad = (pe_moment / pe_dt).try_into().unwrap();
-
-
-
-
-        // check gradient strength
         assert!(gpe_x.si().abs() <= gre.grad_limit_tpm, "gpe_x exceeds max gradient strength: {}",gpe_x.si());
 
         // echo readout
@@ -352,30 +355,48 @@ impl EventControllers {
             .to_shared();
 
         // phase encoding steps for y and z axes
-        let mut pe_steps_y:Vec<i32> = (0..gre.n_phase_y).map(|step| step as i32).map(|step| step - gre.n_phase_y as i32  / 2).collect();
-        let mut pe_steps_z:Vec<i32> = (0..gre.n_phase_z).map(|step| step as i32).map(|step| step - gre.n_phase_z as i32  / 2).collect();
+
+        let s = read_to_string(gre.cs_table.as_ref().expect("cs table must be defined")).expect("invalid cs table file");
+        let cs_samples:Vec<i32> = s.lines().map(|idx| idx.parse::<i32>()
+            .expect("failed to parse cs table")).collect();
+
+        let mut pe_steps_y = vec![];
+        let mut pe_steps_z = vec![];
+        cs_samples.chunks_exact(2).for_each(|pair|{
+            pe_steps_y.push(pair[0]);
+            pe_steps_z.push(pair[1]);
+        });
 
         if gre.gop_mode {
             pe_steps_y.fill(0);
             pe_steps_z.fill(0);
         }
 
+        gre.n_phase_y = Some(pe_steps_y.len());
+        gre.n_phase_z = Some(pe_steps_z.len());
+
+        let max_y = pe_steps_y.iter().map(|x| x.abs()).max().unwrap();
+        let max_z = pe_steps_z.iter().map(|x| x.abs()).max().unwrap();
+
+        let gpe_y_max = gpe_y.scale(max_y);
+        assert!(gpe_y_max.si().abs() <= gre.grad_limit_tpm, "gpy exceeds max gradient strength: {}",gpe_y_max.si());
+        let gpe_z_max = gpe_z.scale(max_z);
+        assert!(gpe_z_max.si().abs() <= gre.grad_limit_tpm, "gpz exceeds max gradient strength: {}",gpe_z_max.si());
+
         let lut_pe_y = LUT::new("pe_y_lut",&pe_steps_y).to_shared();
         let lut_pe_z = LUT::new("pe_z_lut",&pe_steps_z).to_shared();
 
-        // view index is used for phase y index directly
         let c_gpe_y = EventControl::<FieldGrad>::new()
             .with_lut(&lut_pe_y)
             .with_source_loop(VIEW)
-            .with_mod(gre.n_phase_y as i32)
+            //.with_mod(gre.n_phase_y as i32)
             .with_grad_scale(gpe_y)
             .to_shared();
 
-        // phase z index is view_idx % n_phase_y
         let c_gpe_z = EventControl::<FieldGrad>::new()
             .with_lut(&lut_pe_z)
             .with_source_loop(VIEW)
-            .with_div_op(gre.n_phase_y as i32)
+            //.with_div_op(gre.n_phase_y as i32)
             .with_grad_scale(gpe_z)
             .to_shared();
 
@@ -403,7 +424,7 @@ struct Events {
 
 impl Events {
 
-    fn build(mgre: &Gre) -> Events {
+    fn build(mgre: &mut Gre) -> Events {
         let w = Waveforms::build(mgre);
         let ec = EventControllers::build(mgre);
         let e_alpha = RfEvent::new(Events::alpha(),&w.rf,&ec.c_rfp);
