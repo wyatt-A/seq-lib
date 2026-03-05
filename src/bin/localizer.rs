@@ -35,7 +35,7 @@ fn main() {
         ParamTree::from_file(&args.param_file).unwrap()
     };
 
-    let localizer = Localizer::from_params(&param_tree);
+    let mut localizer = Localizer::from_params(&param_tree);
 
     localizer.param_tree().to_json_file(&args.param_file).unwrap();
 
@@ -48,7 +48,7 @@ fn main() {
     let timeline_data = localizer.render_timeline(&state).to_raw_loop_range(0,2);
     run_viewer(timeline_data).unwrap();
 
-    let localizer = localizer.compile();
+    let localizer = localizer.build_sequence();
     //compile_seq(&localizer, out_dir, "localizer", false);
     //build_seq(out_dir)
 }
@@ -314,7 +314,7 @@ impl Events {
 }
 
 impl PulseSequence for Localizer {
-    fn compile(&self) -> (SeqLoop,Self) {
+    fn build_sequence(&mut self) -> SeqLoop {
 
         let waveforms = Waveforms::build(&self);
         let event_controllers = EventControllers::build(self, &waveforms);
@@ -360,7 +360,7 @@ impl PulseSequence for Localizer {
         vl.add_loop(sl).unwrap();
         vl.set_rep_time(Time::ms(50)).unwrap();
 
-        (vl,self.clone())
+        vl
 
     }
 

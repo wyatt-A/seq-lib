@@ -10,7 +10,7 @@ seq_struct = {git = "ssh://git@github.com/wyatt-A/seq_struct.git"}
 #seq_struct = {path = "../seq_struct"}
 nalgebra = "0.34.1"
 clap = { version = "4.5.53", features = ["derive"] }
-toml = "0.9.8"
+toml = "1.0.4"
 serde = { version = "1.0.228", features = ["derive"] }
 mrs-ppl = {git = "ssh://git@github.com/wyatt-A/mrs-ppl.git"}
 array-lib = {git = "ssh://git@github.com/wyatt-A/array-lib.git", features = ["io-mrd","io-cfl","io-nifti"]}
@@ -18,3 +18,4 @@ rayon = "1.11.0"
 dft-lib = {git = "ssh://git@github.com/wyatt-A/dft-lib.git"}
 param-editor = {git = "ssh://git@github.com/wyatt-A/param-editor.git"}
 pulse-seq-view = {git = "ssh://git@github.com/wyatt-A/pulse-seq-view.git"}
+headfile = {git = "ssh://git@github.com/wyatt-A/headfile.git"}

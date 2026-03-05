@@ -5,6 +5,7 @@ use array_lib::{ArrayDim, NormSqr};
 use array_lib::io_nifti::write_nifti;
 use dft_lib::common::{FftDirection, NormalizationType};
 use dft_lib::rs_fft::rs_fftn_batched;
+use headfile::Headfile;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{FieldGrad, Freq, Length, Time};
 use mr_units::quantity::Unit;
@@ -17,9 +18,11 @@ use seq_struct::gradient_event::GradEvent;
 use seq_struct::rf_event::RfEvent;
 use seq_struct::seq_loop::SeqLoop;
 use seq_struct::variable::LUT;
+use serde::{Deserialize, Serialize};
+use toml::Value;
 use seq_lib::defs::{EXPERIMENT, GS, GW, RF, RFP, RF_POWER, VIEW};
 use seq_lib::grad_pulses::{half_sin, quarter_sin_rd, quarter_sin_ru, ramp_down, ramp_up, trapezoid};
-use seq_lib::{rf_pulses, PulseSequence};
+use seq_lib::{rf_pulses, PulseSequence, ToHeadfile, TOML};
 use seq_lib::grad_pulses::scale_factors::{HALF_SIN_SCALE, QUARTER_SIN_SCALE};
 
 /// format and analyze k-space data for recon. This fills in extra parameters
@@ -108,6 +111,7 @@ fn format_acquisition(mrd_file:impl AsRef<Path>, out_cfl:impl AsRef<Path>, gre:&
     println!("shifting k-space for first-order phase correction");
     let vol_dim = ArrayDim::from_shape(&vol_data_dims.shape()[0..3]);
     let mut tmp_dst = vol_dim.alloc(Complex32::ZERO);
+    let mut dc_indices = vec![];
     vol_data.chunks_exact_mut(vol_dim.numel()).enumerate().for_each(|(echo_idx,vol)|{
         // reverse-shift
         let shift = [
@@ -115,11 +119,14 @@ fn format_acquisition(mrd_file:impl AsRef<Path>, out_cfl:impl AsRef<Path>, gre:&
             -dc_coords[echo_idx][1],
             -dc_coords[echo_idx][2]
         ];
+        dc_indices.push(dc_coords[echo_idx][0]);
         // circshift vol into tmp, then write tmp back into vol
         tmp_dst.fill(Complex32::ZERO);
         vol_dim.circshift(&shift,vol,&mut tmp_dst);
         vol.copy_from_slice(&tmp_dst);
     });
+
+    gre.dc_indices = Some(dc_indices);
 
     println!("writing ksp cfl");
     array_lib::io_cfl::write_cfl(&out_cfl,&vol_data,vol_data_dims);
@@ -169,9 +176,8 @@ fn main() {
     gre.pspace_step_size_mtpm = -100.;
     gre.rep_time_ms = 30.;
 
-    let (seq_loop,mut gre) = gre.compile();
+    let seq_loop = gre.build_sequence();
     let user_state = gre.adjustment_state();
-    println!("{:?}",gre);
 
     //let out_dir = r"D:\dev\test\260303\mgre";
     //build_ppl(&seq_loop,out_dir,"mgre",true);
@@ -179,17 +185,19 @@ fn main() {
 
     format_acquisition("/Users/Wyatt/scratch/mgre/out.mrd", "/Users/Wyatt/scratch/mgre/out.cfl", &mut gre);
 
+    // write headfile to record metadata
+    println!("writing headfile");
+    let mut hf = gre.headfile();
+    hf.write_timestamp();
+    hf.to_file("/Users/Wyatt/scratch/mgre/gre").unwrap();
+
     // let ps_data = seq_loop.render_timeline(&user_state).to_raw();
     // run_viewer(ps_data).unwrap();
 
 }
 
 
-
-
-
-
-#[derive(Debug,Clone)]
+#[derive(Debug,Clone,Serialize,Deserialize)]
 pub struct Gre {
     /// field of view in mm
     fov_mm: [f64;3],
@@ -241,6 +249,8 @@ pub struct Gre {
     delta_te_measured_ms: Option<Vec<f64>>,
     /// measured time of first echo based on dc sample and acq_start
     te_measured_ms: Option<f64>,
+    /// readout sample index of k0 (DC)
+    dc_indices:Option<Vec<isize>>
 }
 
 impl Default for Gre {
@@ -266,19 +276,48 @@ impl Default for Gre {
             post_pe_del_us: 13.,
             post_ru_del_us: 50.,
             post_acq_del_us: 50.,
+            grad_limit_tpm: 2.0,
             te_estimate_ms: None,
             acq_start_ms: None,
-            grad_limit_tpm: 2.0,
             delta_te_measured_ms: None,
             te_measured_ms: None,
+            dc_indices: None,
         }
     }
 }
 
-impl PulseSequence for Gre {
-    fn compile(&self) -> (SeqLoop,Self) {
 
-        let mut gre = self.clone();
+const SAFE_INSERT:bool = true;
+const UNSAFE_INSERT:bool = false;
+
+impl ToHeadfile for Gre {
+    fn headfile(&self) -> Headfile {
+        let param_table = self.to_toml();
+
+        let mut h = Headfile::new();
+        h.dim_x(self.matrix_size[0]);
+        h.dim_y(self.matrix_size[1]);
+        h.dim_z(self.matrix_size[2]);
+        h.ne(self.n_pspace_samples);
+        h.fov_x(self.fov_mm[0]);
+        h.fov_y(self.fov_mm[1]);
+        h.fov_z(self.fov_mm[2]);
+        h.ne(self.n_pspace_samples);
+        h.te(self.te_measured_ms.unwrap());
+        h.bw(self.bandwidth_khz * 1e3 / 2.);
+        h.insert_scalar("te_estimate_ms", self.te_estimate_ms.unwrap(), UNSAFE_INSERT);
+        h.tr((self.rep_time_ms * 1e3) as usize);
+        h.insert_list_1d("delta_te",self.delta_te_measured_ms.as_ref().unwrap(), UNSAFE_INSERT);
+        h.insert_scalar("pspace_stepsize_mtpm", self.pspace_step_size_mtpm, UNSAFE_INSERT);
+        h.insert_toml_table(param_table.as_table().expect("parameters must be a table"), SAFE_INSERT);
+        h
+    }
+}
+
+impl TOML for Gre {}
+
+impl PulseSequence for Gre {
+    fn build_sequence(&mut self) -> SeqLoop {
 
         let tr = Time::ms(self.rep_time_ms);
         let pre_calc_time = Time::ms(4);
@@ -287,14 +326,14 @@ impl PulseSequence for Gre {
         let post_ro_ramp_del = Time::us(self.post_ru_del_us);
         let post_acq_del = Time::us(self.post_acq_del_us);
 
-        let e = Events::build(&mut gre);
+        let e = Events::build(self);
 
         let n_views = if self.sim_mode {
             10
         }else {
             // default to 4 views if the number of phase encoding steps has not been set
-            let n_phase_y = gre.n_phase_y.unwrap_or(2);
-            let n_phase_z = gre.n_phase_z.unwrap_or(2);
+            let n_phase_y = self.n_phase_y.unwrap_or(2);
+            let n_phase_z = self.n_phase_z.unwrap_or(2);
             assert_eq!(n_phase_y, n_phase_z);
             n_phase_y
         };
@@ -314,32 +353,32 @@ impl PulseSequence for Gre {
 
         // end of alpha pulse to start of phase encoding
         if let Ok(time) = vl.set_min_time_span(Events::alpha(),Events::pe(),100,0,post_alpha_del) {
-            gre.post_alpha_del_us = time.as_us();
-            println!("set post-alpha delay to {:?} us", gre.post_alpha_del_us);
+            self.post_alpha_del_us = time.as_us();
+            println!("set post-alpha delay to {:?} us", self.post_alpha_del_us);
         }else {
             panic!("failed to set post-alpha delay");
         }
 
         if let Ok(time) = vl.set_min_time_span(Events::pe(),Events::ro_ru(),100,0,post_pe_del) {
-            gre.post_pe_del_us = time.as_us();
-            println!("set post-phase encode delay to {:?} us", gre.post_pe_del_us);
+            self.post_pe_del_us = time.as_us();
+            println!("set post-phase encode delay to {:?} us", self.post_pe_del_us);
         }
 
         if let Ok(time) = vl.set_min_time_span(Events::ro_ru(),Events::acq(),100,0,post_ro_ramp_del) {
-            gre.post_ru_del_us = time.as_us();
-            println!("set post-readout ramp delay to {:?} us", gre.post_ru_del_us);
+            self.post_ru_del_us = time.as_us();
+            println!("set post-readout ramp delay to {:?} us", self.post_ru_del_us);
         }
 
         if let Ok(time) = vl.set_min_time_span(Events::acq(),Events::ro_rd(),100,0,post_acq_del) {
-            gre.post_acq_del_us = time.as_us();
-            println!("set post-acq delay to {:?} us", gre.post_acq_del_us);
+            self.post_acq_del_us = time.as_us();
+            println!("set post-acq delay to {:?} us", self.post_acq_del_us);
         }
 
         vl.set_averages(1);
         vl.set_rep_time(tr).unwrap();
 
         // record the start time of the first sample relative to the center of the excitation pulse
-        gre.acq_start_ms = Some(vl.get_time_span(Events::alpha(),Events::acq(),50,0).unwrap().as_ms());
+        self.acq_start_ms = Some(vl.get_time_span(Events::alpha(),Events::acq(),50,0).unwrap().as_ms());
 
 
         // calculate echo times
@@ -348,14 +387,14 @@ impl PulseSequence for Gre {
         let t1 = vl.get_time_span(Events::alpha(),Events::ro_rd(),50,0).unwrap();
         // first echo forms between ru and rd, parameterized by echo location
         let te1 = (t1.as_ms() - t0.as_ms()) * self.echo_location + t0.as_ms();
-        gre.te_estimate_ms = Some(te1);
+        self.te_estimate_ms = Some(te1);
 
         expl.add_loop(vl).unwrap();
         expl.set_pre_calc(Time::us(50));
         //expl.no_overhead();
 
         // return loop and modified parameters
-        (expl, gre)
+        expl
 
     }
 

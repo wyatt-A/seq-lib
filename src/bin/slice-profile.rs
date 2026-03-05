@@ -35,9 +35,9 @@ const ACQ: &str = "acq";
 
 
 fn main() {
-    let sp = SliceProfile::default();
-    let s = sp.compile();
-    build_ppl(&s.0,r"C:\Users\MRS\seq-lib\test_out","out",false);
+    let mut sp = SliceProfile::default();
+    let s = sp.build_sequence();
+    build_ppl(&s,r"C:\Users\MRS\seq-lib\test_out","out",false);
     compile_ppl(r"C:\Users\MRS\seq-lib\test_out");
     // let p = sp.adjustment_state();
     // sp.render_to_file(&p,"slice_profile");
@@ -212,7 +212,7 @@ impl Events {
 
 
 impl PulseSequence for SliceProfile {
-    fn compile(&self) -> (SeqLoop,Self) {
+    fn build_sequence(&mut self) -> SeqLoop{
 
         let tau = Time::ms(4);
 
@@ -254,7 +254,7 @@ impl PulseSequence for SliceProfile {
 
         el.add_loop(vl).unwrap();
 
-        (el,self.clone())
+        el
     }
 
     fn adjustment_state(&self) -> HashMap<String, f64> {

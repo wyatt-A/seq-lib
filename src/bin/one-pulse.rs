@@ -50,7 +50,7 @@ impl Default for OnePulse {
 
 
 impl PulseSequence for OnePulse {
-    fn compile(&self) -> (SeqLoop,Self) {
+    fn build_sequence(&mut self) -> SeqLoop {
         let mut vl = SeqLoop::new_main("view",self.n_reps);
         let events = Events::new(self);
         vl.add_event(events.rf_pulse).unwrap();
@@ -58,7 +58,7 @@ impl PulseSequence for OnePulse {
         vl.set_time_span(RF,ACQ,50,0,Time::us(self.delay_us)).unwrap();
         vl.set_pre_calc(Time::ms(2));
         vl.set_rep_time(Time::ms(self.rep_time_ms)).unwrap();
-        (vl,self.clone())
+        vl
     }
 
     fn adjustment_state(&self) -> HashMap<String, f64> {
@@ -124,7 +124,7 @@ fn main() {
     let mut file = File::open(&args.input.with_extension("toml")).unwrap();
     let mut toml_str = String::new();
     file.read_to_string(&mut toml_str).unwrap();
-    let one_pulse:OnePulse = toml::from_str(&toml_str).unwrap();
+    let mut one_pulse:OnePulse = toml::from_str(&toml_str).unwrap();
     let state = one_pulse.adjustment_state();
     one_pulse.render_to_file(&state,&args.output);
 }

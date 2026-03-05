@@ -433,7 +433,7 @@ impl Events {
 }
 
 impl PulseSequence for DTIFse {
-    fn compile(&self) -> (SeqLoop,Self) {
+    fn build_sequence(&mut self) -> SeqLoop {
 
         let w = Waveforms::build(self);
         let e = EventControllers::build(self,&w);
@@ -505,7 +505,7 @@ impl PulseSequence for DTIFse {
         vl.set_rep_time(Time::ms(100)).unwrap();
 
         match self.mode {
-            Mode::Tune { .. } => (vl,self.clone()), // return just the view loop
+            Mode::Tune { .. } => vl, // return just the view loop
             Mode::Acq { .. } | Mode::Measure { .. } => { // return the view loop inside the experiment loop for diffusion encoding
                 let n_dx = e.diffusion_x.lut().unwrap().len();
                 let n_dy = e.diffusion_y.lut().unwrap().len();
@@ -516,7 +516,7 @@ impl PulseSequence for DTIFse {
                 el.add_loop(vl).unwrap();
                 el.set_pre_calc(Time::ms(1));
                 el.set_orientations(Orientations::new(&[[Angle::deg(0),Angle::deg(0),Angle::deg(0)]]));
-                (el,self.clone())
+                el
             },
         }
     }
@@ -556,14 +556,14 @@ fn main() {
 
     // mode for single rep through k0
     sequence.mode = Mode::Tune {n:1};
-    let s = sequence.compile();
+    let s = sequence.build_sequence();
     let mut adj = sequence.adjustment_state();
 
     // build list of echo times to evaluate each b-matrix
     let mut t_echoes = vec![];
     // get the center of the first echo from the center of ACQ
-    t_echoes.extend(s.0.find_occurrences(ACQ,50));
-    t_echoes.extend(s.0.find_occurrences(ACQT,50));
+    t_echoes.extend(s.find_occurrences(ACQ,50));
+    t_echoes.extend(s.find_occurrences(ACQT,50));
 
     // print echo times
     for (i,echo) in t_echoes.iter().enumerate() {
@@ -572,7 +572,8 @@ fn main() {
 
     let grad_soltns:Vec<_> = sequence.target_bvalues.iter().map(|&target_bval|{
         grad_solve(
-            &sequence,
+            &s,
+            adj.clone(),
             "diff_x",
             target_bval,
             FieldGrad::tesla_per_meter(0), // lower limit
@@ -610,7 +611,7 @@ fn main() {
         *adj.get_mut("diff_z").unwrap() = g_vector[2].si();
         let g_max = g_vector[0].si().abs().max(g_vector[1].si().abs()).max(g_vector[2].si().abs());
         //evaluate b-matrix for each g-vector and write to string
-        let b_mat = calc_b_matrix(&sequence, &adj, &[REF,REFT], t_echoes[echo_idx], Nuc1H);
+        let b_mat = calc_b_matrix(&mut sequence, &adj, &[REF,REFT], t_echoes[echo_idx], Nuc1H);
         writeln!(&mut b_info,
                  "{v}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                  g_max.si(), b_mat.trace(), b_mat.bxx, b_mat.byy, b_mat.bzz, b_mat.bxy, b_mat.bxz, b_mat.byz
@@ -621,7 +622,7 @@ fn main() {
     //params.mode = Mode::Acq { grad_table: grad_tab};
     sequence.mode = Mode::Measure {r:3,n_dummies:5,fov_y: sequence.fov_y_mm,fov_z: sequence.fov_z_mm, g_vectors: g_vectors.clone()};
 
-    build_ppl(&sequence.compile().0, out_dir, "seq", false);
+    build_ppl(&sequence.build_sequence(), out_dir, "seq", false);
 
     sequence.mode = Mode::Tune {n:1};
     let mut adj = sequence.adjustment_state();

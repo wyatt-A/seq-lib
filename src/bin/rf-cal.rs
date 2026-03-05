@@ -20,7 +20,7 @@ type PC = Rc<EventControl<f64>>;
 type RF = Rc<RfPulse>;
 
 fn main() {
-    let rfc = RfCal::default();
+    let mut rfc = RfCal::default();
     let p = rfc.adjustment_state();
     rfc.render_to_file(&p,"rf_cal");
 }
@@ -168,7 +168,7 @@ impl Default for RfCal {
 }
 
 impl PulseSequence for RfCal {
-    fn compile(&self) -> (SeqLoop,Self) {
+    fn build_sequence(&mut self) -> SeqLoop {
 
         let el = EventLabels::new();
         let w = Waveforms::new(self);
@@ -197,7 +197,7 @@ impl PulseSequence for RfCal {
         vl.set_pre_calc(Time::ms(2));
         vl.set_rep_time(Time::ms(self.rep_time_ms)).unwrap();
 
-        (vl,self.clone())
+        vl
     }
 
     fn adjustment_state(&self) -> HashMap<String, f64> {
