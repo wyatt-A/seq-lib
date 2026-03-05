@@ -1,28 +1,18 @@
-pub mod rf_pulses;
-pub mod grad_pulses;
-pub mod q_calc;
-
-
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use clap::{Parser};
+use clap;
 pub use seq_struct;
-use mr_units::constants::Nucleus::Nuc1H;
-use mr_units::primitive::{Angle, FieldGrad, Freq, Length, Time};
-use mr_units::quantity::Unit;
-use seq_struct::acq_event::ACQEvent;
 use seq_struct::compile::{Seq, Timeline};
-use seq_struct::grad_strength::EventControl;
-use seq_struct::gradient_event::GradEvent;
-use seq_struct::rf_event::RfEvent;
 use seq_struct::seq_loop::SeqLoop;
-use seq_struct::waveform::Waveform;
-use crate::rf_pulses::{hardpulse, hardpulse_composite, sinc5};
 use headfile::Headfile;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde::de::DeserializeOwned;
+
+pub mod rf_pulses;
+pub mod grad_pulses;
+pub mod q_calc;
 
 #[derive(clap::Parser)]
 pub struct Args {
@@ -88,19 +78,6 @@ pub mod defs {
 
     // rf power adj
     pub const RF_POWER:&str = "rf_power";
-}
-
-#[derive(Parser, Debug)]
-pub struct InputArgs {
-    /// Input pulse sequence parameters
-    pub input: PathBuf,
-
-    /// Output sequence file path
-    pub output: PathBuf,
-
-    /// Write default pulse sequence settings
-    #[arg(short, long)]
-    pub default: bool,
 }
 
 /// Specifies a data structure that compiles to a pulse sequence

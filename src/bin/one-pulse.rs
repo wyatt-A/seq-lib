@@ -1,8 +1,5 @@
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{Read, Write};
 use std::rc::Rc;
-use clap::Parser;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{Freq, Time};
 use mr_units::quantity::Unit;
@@ -11,7 +8,7 @@ use seq_struct::grad_strength::EventControl;
 use seq_struct::rf_event::RfEvent;
 use seq_struct::rf_pulse::RfPulse;
 use seq_struct::seq_loop::SeqLoop;
-use seq_lib::{InputArgs, PulseSequence};
+use seq_lib::PulseSequence;
 use seq_lib::rf_pulses::hardpulse;
 use serde::{Deserialize, Serialize};
 
@@ -114,17 +111,17 @@ impl Events {
 }
 
 fn main() {
-    let args = InputArgs::parse();
-    if args.default {
-        let p = OnePulse::default();
-        let config = toml::to_string_pretty(&p).unwrap();;
-        let mut file = File::create(&args.input.with_extension("toml")).unwrap();
-        file.write_all(config.as_bytes()).unwrap();
-    }
-    let mut file = File::open(&args.input.with_extension("toml")).unwrap();
-    let mut toml_str = String::new();
-    file.read_to_string(&mut toml_str).unwrap();
-    let mut one_pulse:OnePulse = toml::from_str(&toml_str).unwrap();
-    let state = one_pulse.adjustment_state();
-    one_pulse.render_to_file(&state,&args.output);
+    // let args = InputArgs::parse();
+    // if args.default {
+    //     let p = OnePulse::default();
+    //     let config = toml::to_string_pretty(&p).unwrap();;
+    //     let mut file = File::create(&args.input.with_extension("toml")).unwrap();
+    //     file.write_all(config.as_bytes()).unwrap();
+    // }
+    // let mut file = File::open(&args.input.with_extension("toml")).unwrap();
+    // let mut toml_str = String::new();
+    // file.read_to_string(&mut toml_str).unwrap();
+    // let mut one_pulse:OnePulse = toml::from_str(&toml_str).unwrap();
+    // let state = one_pulse.adjustment_state();
+    // one_pulse.render_to_file(&state,&args.output);
 }
