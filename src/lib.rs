@@ -4,6 +4,8 @@ pub mod q_calc;
 
 
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use clap::{Parser};
 pub use seq_struct;
@@ -28,13 +30,36 @@ pub struct Args {
     /// parameter file to read or write
     pub param_file: PathBuf,
 
+    /// base directory to write files
+    pub base_dir: PathBuf,
+
+    /// display pulse sequence
+    #[clap(long)]
+    pub display: bool,
+
     /// initialize parameters with default values
     #[clap(long)]
     pub init: bool,
 
-    /// open parameter editor
+    /// build setup routine for pulse sequence
     #[clap(long)]
-    pub edit: bool,
+    pub setup: bool,
+
+    /// build acquisition routine for pulse sequence
+    #[clap(long)]
+    pub acquire: bool,
+
+    /// compile ppl for MRS simulation software
+    #[clap(long)]
+    pub sim: bool,
+
+    /// run finish routine after acquire to write headfile and other resources
+    #[clap(long)]
+    pub finish: bool,
+
+    /// do not compile ppl. Useful for testing without the scanner
+    #[clap(short,long)]
+    pub skip_ppl_compile: bool
 }
 
 pub mod defs {
@@ -105,6 +130,18 @@ pub trait ToHeadfile {
 }
 
 pub trait TOML: Serialize + DeserializeOwned {
+
+    fn to_file(&self,filename: impl AsRef<Path>) {
+        let mut f = File::create(filename.as_ref().with_extension("toml")).unwrap();
+        f.write_all(self.to_toml_str().as_bytes()).unwrap();
+    }
+
+    fn from_file(filename:impl AsRef<Path>) -> Self {
+        let mut f = File::open(filename.as_ref().with_extension("toml")).unwrap();
+        let toml_str = std::io::read_to_string(&mut f).unwrap();
+        toml::from_str(&toml_str).unwrap()
+    }
+
     fn to_toml(&self) -> toml::Value {
         let toml_str = self.to_toml_str();
         toml::from_str(&toml_str).unwrap()

@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::fs::{create_dir_all, read_to_string, File};
-use std::io::Write;
 use std::path::{PathBuf, Path};
 use array_lib::{ArrayDim, NormSqr};
 use array_lib::io_nifti::write_nifti;
+use clap::Parser;
 use dft_lib::common::{FftDirection, NormalizationType};
 use dft_lib::rs_fft::rs_fftn_batched;
 use headfile::Headfile;
@@ -20,55 +20,91 @@ use seq_struct::rf_event::RfEvent;
 use seq_struct::seq_loop::SeqLoop;
 use seq_struct::variable::LUT;
 use serde::{Deserialize, Serialize};
-use toml::Value;
 use seq_lib::defs::{EXPERIMENT, GS, GW, RF, RFP, RF_POWER, VIEW};
 use seq_lib::grad_pulses::{half_sin, quarter_sin_rd, quarter_sin_ru, ramp_down, ramp_up, trapezoid};
-use seq_lib::{rf_pulses, PulseSequence, ToHeadfile, TOML};
+use seq_lib::{rf_pulses, Args, PulseSequence, ToHeadfile, TOML};
 use seq_lib::grad_pulses::scale_factors::{HALF_SIN_SCALE, QUARTER_SIN_SCALE};
+
+const TAG: &str = "gre";
 
 fn main() {
 
+    let args = Args::parse();
 
-    let setup = true;
-    let acq = true;
-    let finish = true;
-
-    let base_dir = PathBuf::from(r"D:\dev\test\260305_00");
-    let build_dir = base_dir.join("setup");
+    let base_dir = args.base_dir;
+    let setup_dir = base_dir.join("setup");
     let acq_dir = base_dir.join("acq");
+    let sim_dir = base_dir.join("sim");
 
-    let mut f = File::open(base_dir.join("gre_base.toml")).unwrap();
-    let toml_str = std::io::read_to_string(&mut f).unwrap();
-    let mut gre = toml::from_str::<Gre>(&toml_str).unwrap();
-
-    if setup {
-        gre.gop_mode = true;
-        let seq_loop = gre.build_sequence();
-        create_dir_all(&build_dir).unwrap();
-        build_ppl(&seq_loop,&build_dir,"gre",true);
-        compile_ppl(&build_dir);
-        let hf = gre.headfile();
-        hf.to_file(&build_dir.join("gre_setup.headfile")).unwrap();
+    if args.init {
+        let gre = Gre::default();
+        gre.to_file(args.param_file);
         return
-        // set gop mode true
     }
 
-    if acq{
+    if args.display {
+        let mut gre = Gre::from_file(args.param_file);
+        gre.gop_mode = false;
+        gre.sim_mode = true;
+        let seq_loop = gre.build_sequence();
+        let user_state = gre.adjustment_state();
+        let ps_data = seq_loop.render_timeline(&user_state).to_raw();
+        run_viewer(ps_data).unwrap();
+        return
+    }
+
+    if args.setup {
+        let mut gre = Gre::from_file(args.param_file);
+        gre.gop_mode = true;
+        let seq_loop = gre.build_sequence();
+        create_dir_all(&setup_dir).unwrap();
+        build_ppl(&seq_loop, &setup_dir, TAG, false);
+        gre.to_file(setup_dir.join(TAG));
+        let hf = gre.headfile();
+        hf.to_file(&setup_dir.join(format!("{TAG}_setup"))).unwrap();
+        if args.skip_ppl_compile {
+            return
+        }
+        compile_ppl(&setup_dir);
+        return
+    }
+
+    if args.acquire {
+        let mut gre = Gre::from_file(args.param_file);
         gre.gop_mode = false;
         let seq_loop = gre.build_sequence();
         create_dir_all(&acq_dir).unwrap();
-        build_ppl(&seq_loop, &acq_dir, "gre", true);
+        build_ppl(&seq_loop, &acq_dir, TAG, false);
+        gre.to_file(acq_dir.join(TAG));
+        if args.skip_ppl_compile {
+            return
+        }
         compile_ppl(&acq_dir);
         // copy ppl params
         // run acquisition
         return
     }
 
-    if finish {
-        format_acquisition(acq_dir.join("gre.mrd"),acq_dir.join("gre.cfl"),&mut gre);
+    if args.finish {
+        let mut gre = Gre::from_file(acq_dir.join(TAG));
+        finish_acquisition(acq_dir.join(format!("{TAG}.mrd")), acq_dir.join(TAG), &mut gre);
+        gre.to_file(acq_dir.join(TAG));
         let mut hf = gre.headfile();
         hf.write_timestamp();
-        hf.to_file(&acq_dir.join("gre.headfile")).unwrap();
+        hf.to_file(&acq_dir.join(TAG)).unwrap();
+        return
+    }
+
+    if args.sim {
+        let mut gre = Gre::from_file(args.param_file);
+        gre.gop_mode = false;
+        gre.sim_mode = true;
+        let seq_loop = gre.build_sequence();
+        create_dir_all(&sim_dir).unwrap();
+        gre.to_file(sim_dir.join(TAG));
+        build_ppl(&seq_loop, &sim_dir, TAG, true);
+        compile_ppl(&sim_dir);
+        return
     }
 
 }
@@ -542,7 +578,7 @@ impl Events {
 }
 
 /// format and analyze k-space data for recon. This fills in extra parameters
-fn format_acquisition(mrd_file:impl AsRef<Path>, out_cfl:impl AsRef<Path>, gre:&mut Gre) {
+fn finish_acquisition(mrd_file:impl AsRef<Path>, out_cfl:impl AsRef<Path>, gre:&mut Gre) {
 
     // size of gridded data set
     let vol_data_dims = ArrayDim::from_shape(

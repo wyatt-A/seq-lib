@@ -25,100 +25,14 @@ use seq_lib::Args;
 
 
 fn main() {
-    let out_dir = r"D:\dev\test\260123";
-
     let args = Args::parse();
 
-    let param_tree = if args.init {
-        Localizer::default().param_tree()
-    }else {
-        ParamTree::from_file(&args.param_file).unwrap()
-    };
-
-    let mut localizer = Localizer::from_params(&param_tree);
-
-    localizer.param_tree().to_json_file(&args.param_file).unwrap();
-
-    if args.edit {
-        edit(&args.param_file).unwrap();
-    }
-
-    let state = localizer.adjustment_state();
-
-    let timeline_data = localizer.render_timeline(&state).to_raw_loop_range(0,2);
-    run_viewer(timeline_data).unwrap();
-
-    let localizer = localizer.build_sequence();
-    //compile_seq(&localizer, out_dir, "localizer", false);
-    //build_seq(out_dir)
 }
 
-
-impl ParameterTree for Localizer {
-    fn param_tree(&self) -> ParamTree {
-        ParamTree::new("localizer_default","localizer")
-            .with_parameter(
-                "Geometry",
-                "FOV",
-                Parameter::new("fov","fov",Value::Float(self.fov)).with_unit_str("mm").unwrap()
-            ).unwrap()
-            .with_parameter(
-                "Geometry",
-                "Slice Selection",
-                Parameter::new("t_slice","slice thickness",Value::Float(self.slice_thickness_mm)).with_unit_str("mm").unwrap()
-            ).unwrap()
-            .with_parameter(
-                "Geometry",
-                "Slice Selection",
-                Parameter::new("d_slice","pulse duration",Value::Count(self.rf_duration_us)).with_unit_str("us").unwrap()
-            ).unwrap()
-            .with_parameter(
-                "Sampling",
-                "Matrix",
-                Parameter::new("n_read","n read",Value::Count(self.n_samples))
-            ).unwrap()
-            .with_parameter(
-                "Sampling",
-                "Bandwidth",
-                Parameter::new("bw","bandwidth",Value::Float(self.bandwidth_khz)).with_unit_str("khz").unwrap()
-            ).unwrap()
-            .with_parameter(
-                "Gradient",
-                "Timing",
-                Parameter::new("t_ramp","ramp time",Value::Count(self.grad_ramp_time_us)).with_unit_str("us").unwrap()
-            ).unwrap()
-            .with_parameter(
-                "Gradient",
-                "Timing",
-                Parameter::new("t_phase","pe time",Value::Float(self.phase_enc_dur_ms)).with_unit_str("ms").unwrap()
-            ).unwrap()
-            .with_parameter(
-                "Mode",
-                "Setup",
-                Parameter::new("setup","setup mode",Value::Bool(self.setup_mode))
-            ).unwrap()
-    }
-
-    fn from_params(param_tree: &ParamTree) -> Self {
-        // this dump may not work if there is a name collision. If there is a name collision,
-        // we need to query params by tab and group address
-        let params = param_tree.flatten_params().unwrap();
-        Localizer {
-            fov: params.get("fov").unwrap().into(),
-            slice_thickness_mm: params.get("t_slice").unwrap().into(),
-            n_samples: params.get("n_read").unwrap().into(),
-            bandwidth_khz: params.get("bw").unwrap().into(),
-            rf_duration_us: params.get("d_slice").unwrap().into(),
-            grad_ramp_time_us: params.get("t_ramp").unwrap().into(),
-            phase_enc_dur_ms: params.get("t_phase").unwrap().into(),
-            setup_mode: params.get("setup").unwrap().into(),
-        }
-    }
-}
 
 #[derive(Clone,Debug)]
 struct Localizer {
-    fov: f64,
+    fov_mm: f64,
     slice_thickness_mm: f64,
 
     n_samples: usize,
@@ -133,9 +47,9 @@ struct Localizer {
 impl Default for Localizer {
     fn default() -> Self {
         Self {
-            bandwidth_khz: 100.0,
+            fov_mm: 25.6,
             n_samples: 256,
-            fov: 25.6,
+            bandwidth_khz: 100.0,
             slice_thickness_mm: 0.3,
             rf_duration_us: 1500,
             grad_ramp_time_us: 500,
@@ -214,7 +128,7 @@ impl EventControllers {
         let t_dwell = Freq::khz(params.bandwidth_khz).inv();
         let acq_t = t_dwell.scale(params.n_samples);
 
-        let gread = FieldGrad::from_fov(Length::mm(params.fov),t_dwell,Nuc1H);
+        let gread = FieldGrad::from_fov(Length::mm(params.fov_mm), t_dwell, Nuc1H);
         let gro = EventControl::<FieldGrad>::new().with_constant_grad(gread).to_shared();
 
         let rt = Time::us(params.grad_ramp_time_us);
@@ -239,7 +153,7 @@ impl EventControllers {
         let gslr = EventControl::<FieldGrad>::new().with_constant_grad(g_slr).with_adj("ssr").to_shared();
 
         let tpe:Time = (Time::ms(params.phase_enc_dur_ms) + rt).try_into().unwrap();
-        let gpe_step = FieldGrad::from_fov(Length::mm(params.fov),tpe,Nuc1H);
+        let gpe_step = FieldGrad::from_fov(Length::mm(params.fov_mm), tpe, Nuc1H);
 
         let steps = if params.setup_mode {
             vec![0;params.n_samples]
