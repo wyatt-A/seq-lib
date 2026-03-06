@@ -98,6 +98,7 @@ fn main() {
 
 #[derive(Clone,Debug,Serialize,Deserialize)]
 struct RFCal {
+    setup_mode: bool,
     spec_width_khz: f64,
     n_samples: usize,
     slice_thickness_mm: f64,
@@ -120,6 +121,7 @@ impl ToHeadfile for RFCal {}
 impl Default for RFCal {
     fn default() -> RFCal {
         RFCal {
+            setup_mode: false,
             spec_width_khz: 25.,
             n_samples: 256,
             slice_thickness_mm: 5.,
@@ -143,6 +145,10 @@ impl PulseSequence for RFCal {
 
         let events = Events::build(self);
 
+        if self.setup_mode {
+            self.n_steps = 1_000;
+        }
+        
         let mut vl = SeqLoop::new_main(VIEW,self.n_steps);
 
         vl.add_event(events.e_ramp_up).unwrap();
@@ -200,7 +206,11 @@ impl PulseSequence for RFCal {
     }
 
     fn adjustment_state(&self) -> HashMap<String, f64> {
-        HashMap::new()
+        let mut h = HashMap::new();
+        if self.setup_mode {
+            h.insert("rf_power".to_string(),0.0);
+        }
+        h
     }
 }
 
@@ -254,9 +264,14 @@ impl EventControllers {
         let frac_step = (final_frac - init_frac) / (rf_cal.n_steps as f64 - 1.0);
 
         let frac_steps = (0..rf_cal.n_steps).map(|i| i as f64 * frac_step + init_frac).collect();
-        rf_cal.power_steps_frac = Some(frac_steps);
 
-        let c_rfp = EventControl::<f64>::new().with_source_loop(VIEW).with_scale(frac_step).with_constant(init_frac).to_shared();
+        let c_rfp = if rf_cal.setup_mode {
+            EventControl::<f64>::new().with_source_loop(VIEW).with_adj("rf_power").to_shared()
+        }else {
+            rf_cal.power_steps_frac = Some(frac_steps);
+            EventControl::<f64>::new().with_source_loop(VIEW).with_scale(frac_step).with_constant(init_frac).to_shared()
+        };
+
         let c_phase_exc = EventControl::<Angle>::new().with_constant(Angle::deg(45)).to_shared();
         let c_phase_ref = EventControl::<Angle>::new().with_constant(Angle::deg(315)).to_shared();
 
