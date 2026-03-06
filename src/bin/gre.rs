@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::fs::{create_dir_all, read_to_string, File};
+use std::fs::{create_dir_all, read_to_string};
 use std::path::{PathBuf, Path};
 use array_lib::{ArrayDim, NormSqr};
 use array_lib::io_nifti::write_nifti;
@@ -25,16 +25,15 @@ use seq_lib::grad_pulses::{half_sin, quarter_sin_rd, quarter_sin_ru, ramp_down, 
 use seq_lib::{rf_pulses, Args, PulseSequence, ToHeadfile, TOML};
 use seq_lib::grad_pulses::scale_factors::{HALF_SIN_SCALE, QUARTER_SIN_SCALE};
 
-const TAG: &str = "gre";
+const SEQ_NAME: &str = "gre";
 
 fn main() {
 
     let args = Args::parse();
 
-    let base_dir = args.base_dir;
-    let setup_dir = base_dir.join("setup");
-    let acq_dir = base_dir.join("acq");
-    let sim_dir = base_dir.join("sim");
+    let setup_dir = args.setup_dir();
+    let acq_dir = args.acq_dir();
+    let sim_dir = args.sim_dir();
 
     if args.init {
         let gre = Gre::default();
@@ -58,10 +57,10 @@ fn main() {
         gre.gop_mode = true;
         let seq_loop = gre.build_sequence();
         create_dir_all(&setup_dir).unwrap();
-        build_ppl(&seq_loop, &setup_dir, TAG, false);
-        gre.to_file(setup_dir.join(TAG));
+        build_ppl(&seq_loop, &setup_dir, SEQ_NAME, false);
+        gre.to_file(setup_dir.join(SEQ_NAME));
         let hf = gre.headfile();
-        hf.to_file(&setup_dir.join(format!("{TAG}_setup"))).unwrap();
+        hf.to_file(&setup_dir.join(format!("{SEQ_NAME}_setup"))).unwrap();
         if args.skip_ppl_compile {
             return
         }
@@ -74,8 +73,8 @@ fn main() {
         gre.gop_mode = false;
         let seq_loop = gre.build_sequence();
         create_dir_all(&acq_dir).unwrap();
-        build_ppl(&seq_loop, &acq_dir, TAG, false);
-        gre.to_file(acq_dir.join(TAG));
+        build_ppl(&seq_loop, &acq_dir, SEQ_NAME, false);
+        gre.to_file(acq_dir.join(SEQ_NAME));
         if args.skip_ppl_compile {
             return
         }
@@ -86,12 +85,12 @@ fn main() {
     }
 
     if args.finish {
-        let mut gre = Gre::from_file(acq_dir.join(TAG));
-        finish_acquisition(acq_dir.join(format!("{TAG}.mrd")), acq_dir.join(TAG), &mut gre);
-        gre.to_file(acq_dir.join(TAG));
+        let mut gre = Gre::from_file(acq_dir.join(SEQ_NAME));
+        finish_acquisition(acq_dir.join(format!("{SEQ_NAME}.mrd")), acq_dir.join(SEQ_NAME), &mut gre);
+        gre.to_file(acq_dir.join(SEQ_NAME));
         let mut hf = gre.headfile();
         hf.write_timestamp();
-        hf.to_file(&acq_dir.join(TAG)).unwrap();
+        hf.to_file(&acq_dir.join(SEQ_NAME)).unwrap();
         return
     }
 
@@ -101,8 +100,8 @@ fn main() {
         gre.sim_mode = true;
         let seq_loop = gre.build_sequence();
         create_dir_all(&sim_dir).unwrap();
-        gre.to_file(sim_dir.join(TAG));
-        build_ppl(&seq_loop, &sim_dir, TAG, true);
+        gre.to_file(sim_dir.join(SEQ_NAME));
+        build_ppl(&seq_loop, &sim_dir, SEQ_NAME, true);
         compile_ppl(&sim_dir);
         return
     }
@@ -112,6 +111,8 @@ fn main() {
 
 #[derive(Debug,Clone,Serialize,Deserialize)]
 pub struct Gre {
+    /// references the pulse sequence bin used to run the protocol
+    seq_name: String,
     /// field of view in mm
     fov_mm: [f64;3],
     /// size of acquisition grid where `matrix[0]` is the number of readout samples
@@ -169,6 +170,7 @@ pub struct Gre {
 impl Default for Gre {
     fn default() -> Self {
         Gre {
+            seq_name: SEQ_NAME.to_string(),
             fov_mm: [20.,12.8,12.8],
             matrix_size: [512,256,256],
             n_pspace_samples: 3,

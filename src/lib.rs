@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::fs::File;
+use std::fs::{create_dir_all, File};
+use std::io;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use clap;
@@ -50,6 +51,18 @@ pub struct Args {
     /// do not compile ppl. Useful for testing without the scanner
     #[clap(short,long)]
     pub skip_ppl_compile: bool
+}
+
+impl Args {
+    pub fn setup_dir(&self) -> PathBuf {
+        self.base_dir.join("setup")
+    }
+    pub fn acq_dir(&self) -> PathBuf {
+        self.base_dir.join("acq")
+    }
+    pub fn sim_dir(&self) -> PathBuf {
+        self.base_dir.join("sim")
+    }
 }
 
 pub mod defs {
