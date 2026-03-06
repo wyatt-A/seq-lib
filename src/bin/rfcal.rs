@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 use std::fs::create_dir_all;
+use std::path::Path;
+use array_lib::io_cfl::write_cfl;
+use array_lib::io_mrd::read_mrd;
 use clap::Parser;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{Angle, FieldGrad, Freq, Length, Time};
@@ -94,6 +97,27 @@ fn main() {
     }
 
 }
+
+fn finish_acquisition(rf_cal:&mut RFCal, mrd_file:impl AsRef<Path>, out_dir:impl AsRef<Path>) {
+
+    let (calib_data,dims,..) = read_mrd(mrd_file);
+    assert_eq!(dims.shape_squeeze(),vec![rf_cal.n_samples,rf_cal.n_steps,2], "unexpected dimensions");
+
+    write_cfl(out_dir.as_ref().join(format!("{SEQ_NAME}.cfl")),&calib_data,dims);
+
+    // find the view with the least signal in the second stimulated echo
+    let view_idx = 3;
+
+    let pfrac = *rf_cal.power_steps_frac.as_ref().unwrap().get(view_idx).unwrap();
+
+    // time-power product with units of time.
+    let char_time = Time::ms(rf_cal.hard_pulse_dur_ms).scale(pfrac);
+
+    // write time-power product to file to be read by other sequences
+
+}
+
+
 
 
 #[derive(Clone,Debug,Serialize,Deserialize)]
