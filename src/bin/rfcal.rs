@@ -134,7 +134,6 @@ fn finish_acquisition(rf_cal:&mut RFCal, acq_dir:impl AsRef<Path>) {
     println!("idx = {}",m_idx);
     println!("pow_frac = {}",rf_cal.power_steps_frac.as_ref().unwrap().get(m_idx).unwrap());
 
-
     write_cfl(acq_dir.as_ref().join(format!("{SEQ_NAME}.cfl")),&calib_data,dims);
 
 }
