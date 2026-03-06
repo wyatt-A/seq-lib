@@ -48,6 +48,7 @@ fn main() {
 
     if args.setup {
         let mut rf_cal = RFCal::from_file(args.param_file);
+        rf_cal.setup_mode = true;
         let seq_loop = rf_cal.build_sequence();
         create_dir_all(&setup_dir).unwrap();
         build_ppl(&seq_loop, &setup_dir, SEQ_NAME, false);
@@ -290,7 +291,7 @@ impl EventControllers {
         let frac_steps = (0..rf_cal.n_steps).map(|i| i as f64 * frac_step + init_frac).collect();
 
         let c_rfp = if rf_cal.setup_mode {
-            EventControl::<f64>::new().with_source_loop(VIEW).with_adj("rf_power").to_shared()
+            EventControl::<f64>::new().with_adj("rf_power").to_shared()
         }else {
             rf_cal.power_steps_frac = Some(frac_steps);
             EventControl::<f64>::new().with_source_loop(VIEW).with_scale(frac_step).with_constant(init_frac).to_shared()

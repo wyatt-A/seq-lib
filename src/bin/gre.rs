@@ -468,12 +468,18 @@ impl EventControllers {
         // phase encoding steps for y and z axes
 
         let s = read_to_string(gre.pe_table.as_ref().expect("cs table must be defined")).expect("invalid cs table file");
-        let cs_samples:Vec<i32> = s.lines().map(|idx| idx.parse::<i32>()
+        let mut cs_samples:Vec<i32> = s.lines().map(|idx| idx.parse::<i32>()
             .expect("failed to parse cs table")).collect();
+
+        // 10 dummy scans
+        cs_samples.extend(vec![0;20]);
+
+        let mut coords = cs_samples.chunks_exact(2).collect::<Vec<&[i32]>>();
+        coords.sort_by(|a,b| (a[0].pow(2) + a[1].pow(2)).cmp(&(b[0].pow(2) + b[1].pow(2))));
 
         let mut pe_steps_y = vec![];
         let mut pe_steps_z = vec![];
-        cs_samples.chunks_exact(2).for_each(|pair|{
+        coords.iter().for_each(|pair|{
             pe_steps_y.push(pair[0]);
             pe_steps_z.push(pair[1]);
         });
