@@ -115,8 +115,14 @@ pub trait PulseSequence: Default {
 
 }
 
-pub trait ToHeadfile {
-    fn headfile(&self) -> Headfile;
+pub trait ToHeadfile: TOML {
+    fn headfile(&self) -> Headfile {
+        let t = self.to_toml();
+        let tab = t.as_table().expect("failed to get toml table");
+        let mut h = Headfile::new();
+        h.insert_toml_table(&tab,false);
+        h
+    }
 }
 
 pub trait TOML: Serialize + DeserializeOwned {
