@@ -4,6 +4,8 @@ use std::path::Path;
 use array_lib::io_cfl::write_cfl;
 use array_lib::io_mrd::read_mrd;
 use clap::Parser;
+use dft_lib::common::{FftDirection, NormalizationType};
+use dft_lib::rs_fft::{rs_fftn, rs_fftn_batched};
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{Angle, FieldGrad, Freq, Length, Time};
 use mr_units::quantity::Unit;
@@ -79,7 +81,7 @@ fn main() {
 
     if args.finish {
         let mut rf_cal = RFCal::from_file(acq_dir.join(SEQ_NAME));
-        //finish_acquisition(acq_dir.join(format!("{SEQ_NAME}.mrd")), acq_dir.join(SEQ_NAME), &mut gre);
+        finish_acquisition(&mut rf_cal, &acq_dir);
         rf_cal.to_file(acq_dir.join(SEQ_NAME));
         let mut hf = rf_cal.headfile();
         hf.write_timestamp();
@@ -99,22 +101,41 @@ fn main() {
 
 }
 
-fn finish_acquisition(rf_cal:&mut RFCal, mrd_file:impl AsRef<Path>, out_dir:impl AsRef<Path>) {
+fn finish_acquisition(rf_cal:&mut RFCal, acq_dir:impl AsRef<Path>) {
 
-    let (calib_data,dims,..) = read_mrd(mrd_file);
+    let (mut calib_data,dims,..) = read_mrd(&acq_dir.as_ref().join(format!("{SEQ_NAME}.mrd")));
     assert_eq!(dims.shape_squeeze(),vec![rf_cal.n_samples,rf_cal.n_steps,2], "unexpected dimensions");
 
-    write_cfl(out_dir.as_ref().join(format!("{SEQ_NAME}.cfl")),&calib_data,dims);
+    println!("{:?}",dims.shape_squeeze());
 
-    // find the view with the least signal in the second stimulated echo
-    let view_idx = 3;
+    rs_fftn_batched(&mut calib_data,&[rf_cal.n_samples],rf_cal.n_steps*2, FftDirection::Inverse,NormalizationType::Unitary);
 
-    let pfrac = *rf_cal.power_steps_frac.as_ref().unwrap().get(view_idx).unwrap();
+    let avg_sig:Vec<f32> = calib_data.chunks_exact(rf_cal.n_samples).map(|readout|{
+        // this is the average slice signal (K0)
+        readout[0].norm()
+    }).collect();
 
-    // time-power product with units of time.
-    let char_time = Time::ms(rf_cal.hard_pulse_dur_ms).scale(pfrac);
+    let sig_pairs:Vec<&[f32]> = avg_sig.chunks_exact(rf_cal.n_steps).collect();
 
-    // write time-power product to file to be read by other sequences
+    let mut max = 0.;
+    let mut m_idx = 0;
+    let mut ratios = vec![];
+    for i in 0..rf_cal.n_steps {
+        let sig_ratio = sig_pairs[0][i] / sig_pairs[1][i];
+        ratios.push(sig_ratio);
+        if sig_ratio > max {
+            max = sig_ratio;
+            m_idx = i;
+        }
+    }
+
+    println!("sig ratios: {:?}",ratios);
+    println!("{}",max);
+    println!("idx = {}",m_idx);
+    println!("pow_frac = {}",rf_cal.power_steps_frac.as_ref().unwrap().get(m_idx).unwrap());
+
+
+    write_cfl(acq_dir.as_ref().join(format!("{SEQ_NAME}.cfl")),&calib_data,dims);
 
 }
 
