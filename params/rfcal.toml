@@ -1,0 +1,14 @@
+setup_mode = false
+spec_width_khz = 25.0
+n_samples = 256
+slice_thickness_mm = 5.0
+echo_time_ms = 15.0
+mixing_time_ms = 45.0
+rep_time_ms = 1000.0
+hard_pulse_dur_ms = 0.1
+init_power_db = -20.0
+final_power_db = -5.0
+n_steps = 10
+ramp_time_ms = 0.5
+stabilize_time_ms = 5.0
+spoil_time_ms = 5.0

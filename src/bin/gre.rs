@@ -131,6 +131,8 @@ pub struct Gre {
     n_phase_z: Option<usize>,
     /// relative location of gradient echo (0.5 is center in ro)
     echo_location: f64,
+    /// strength of spoiler gradient in millitesla per meter
+    spoiler_grad_mtpm: f64,
     /// duration of rf pulse in microseconds
     rf_pulse_dur_us: f64,
     /// gradient ramp time in microseconds
@@ -183,6 +185,7 @@ impl Default for Gre {
             ramp_time_us: 300.,
             pe_dur_us: 2000.,
             echo_location: 0.5,
+            spoiler_grad_mtpm: 200.,
             smooth_grad: true,
             sim_mode: true,
             gop_mode: true,
@@ -268,6 +271,7 @@ impl PulseSequence for Gre {
         vl.add_event(e.e_ro_ru).unwrap();
         vl.add_event(e.e_acq).unwrap();
         vl.add_event(e.e_ro_rd).unwrap();
+        vl.add_event(e.e_spoil).unwrap();
 
         // end of alpha pulse to start of phase encoding
         if let Ok(time) = vl.set_min_time_span(Events::alpha(),Events::pe(),100,0,post_alpha_del) {
@@ -292,12 +296,14 @@ impl PulseSequence for Gre {
             println!("set post-acq delay to {:?} us", self.post_acq_del_us);
         }
 
+        // turn on spoiler 200 us after readout ramp-down
+        vl.set_min_time_span(Events::ro_rd(),Events::spoil(),100,0,Time::us(200)).unwrap();
+
         vl.set_averages(1);
         vl.set_rep_time(tr).unwrap();
 
         // record the start time of the first sample relative to the center of the excitation pulse
         self.acq_start_ms = Some(vl.get_time_span(Events::alpha(),Events::acq(),50,0).unwrap().as_ms());
-
 
         // calculate echo times
         // time from center of alpha pulse to end of readout ramp up
@@ -401,6 +407,7 @@ struct EventControllers {
     c_gpe_y: GS,
     c_gpe_z: GS,
     c_rfp: RFP,
+    c_gs: GS,
 }
 
 impl EventControllers {
@@ -520,12 +527,16 @@ impl EventControllers {
         // user-adjustable rf power
         let c_rfp = EventControl::<f64>::new().with_adj(RF_POWER).to_shared();
 
+        let c_gs = EventControl::<FieldGrad>::new()
+            .with_constant_grad(FieldGrad::mt_per_meter(gre.spoiler_grad_mtpm)).to_shared();
+
         EventControllers {
             c_gro,
             c_gpe_x,
             c_gpe_y,
             c_gpe_z,
             c_rfp,
+            c_gs,
         }
 
     }
@@ -537,6 +548,7 @@ struct Events {
     e_ro_ru: GradEvent,
     e_ro_rd: GradEvent,
     e_acq: ACQEvent,
+    e_spoil: GradEvent,
 }
 
 impl Events {
@@ -553,6 +565,10 @@ impl Events {
         let e_ro_ru = GradEvent::new(Events::ro_ru()).with_x(&w.ru).with_strength_x(&ec.c_gro);
         let e_ro_rd = GradEvent::new(Events::ro_rd()).with_x(&w.rd).with_strength_x(&ec.c_gro);
         let e_acq = ACQEvent::new(Events::acq(),mgre.matrix_size[0],Freq::khz(mgre.bandwidth_khz).inv());
+        let e_spoil = GradEvent::new(Events::spoil())
+            .with_x(&w.pe).with_strength_x(&ec.c_gs)
+            .with_y(&w.pe).with_strength_y(&ec.c_gs)
+            .with_z(&w.pe).with_strength_z(&ec.c_gs);
 
         Events {
             e_alpha,
@@ -560,6 +576,7 @@ impl Events {
             e_ro_ru,
             e_ro_rd,
             e_acq,
+            e_spoil,
         }
     }
 
@@ -581,6 +598,10 @@ impl Events {
 
     fn acq() -> &'static str {
         "acq"
+    }
+
+    fn spoil() -> &'static str {
+        "spoil"
     }
 
 }
