@@ -86,7 +86,7 @@ fn main() {
 
     if args.finish {
         let mut gre = Gre::from_file(acq_dir.join(SEQ_NAME));
-        finish_acquisition(acq_dir.join(format!("{SEQ_NAME}.mrd")), acq_dir.join(SEQ_NAME), &mut gre);
+        finish_acquisition(&mut gre, &acq_dir);
         gre.to_file(acq_dir.join(SEQ_NAME));
         let mut hf = gre.headfile();
         hf.write_timestamp();
@@ -607,7 +607,8 @@ impl Events {
 }
 
 /// format and analyze k-space data for recon. This fills in extra parameters
-fn finish_acquisition(mrd_file:impl AsRef<Path>, out_cfl:impl AsRef<Path>, gre:&mut Gre) {
+fn finish_acquisition(gre:&mut Gre, acq_dir:impl AsRef<Path>) {
+
 
     // size of gridded data set
     let vol_data_dims = ArrayDim::from_shape(
@@ -628,18 +629,23 @@ fn finish_acquisition(mrd_file:impl AsRef<Path>, out_cfl:impl AsRef<Path>, gre:&
         ]
     );
 
-    let (raw_data, mrd_size, ..) = array_lib::io_mrd::read_mrd(mrd_file);
+    let (raw_data, mrd_size, ..) = array_lib::io_mrd::read_mrd(acq_dir.as_ref().join(format!("{SEQ_NAME}.mrd")));
     assert_eq!(raw_data_dims.shape_squeeze(),mrd_size.shape_squeeze(),"unexpected raw data dimensions");
 
-    // parse phase encode table
-    let pe_table = gre.pe_table.as_ref().unwrap();
-    let pe_table_str = read_to_string(pe_table).unwrap();
-    let lines:Vec<&str> =  pe_table_str.lines().collect();
-    let pe_table:Vec<[isize;2]> = lines.chunks_exact(2).map(|pair|{
-        let y = pair[0].parse::<isize>().expect("failed to parse coordinate");
-        let z = pair[1].parse::<isize>().expect("failed to parse coordinate");
-        [y,z]
+    // read lut
+
+    let s = read_to_string(acq_dir.as_ref().join("lut.txt")).unwrap();
+    let entries:Vec<_> = s.lines().skip(gre.n_pspace_samples)
+        .map(|s| s.parse::<i32>().expect("failed to parse coordinate")).collect();
+
+    let coords:Vec<Vec<isize>> = entries.chunks_exact(gre.n_phase_y.unwrap()).map(|x|{
+        x.iter().map(|x| *x as isize).collect()
     }).collect();
+
+    let mut pe_table = vec![];
+    for i in 0..gre.n_phase_y.unwrap() {
+        pe_table.push([coords[0][i],coords[1][i]]);
+    }
 
     // allocate output data
     let mut vol_data = vol_data_dims.alloc(Complex32::ZERO);
@@ -709,6 +715,8 @@ fn finish_acquisition(mrd_file:impl AsRef<Path>, out_cfl:impl AsRef<Path>, gre:&
 
     gre.dc_indices = Some(dc_indices);
 
+    let out_cfl = acq_dir.as_ref().join(format!("{SEQ_NAME}_ksp"));
+
     println!("writing ksp cfl");
     array_lib::io_cfl::write_cfl(&out_cfl,&vol_data,vol_data_dims);
 
@@ -724,12 +732,20 @@ fn finish_acquisition(mrd_file:impl AsRef<Path>, out_cfl:impl AsRef<Path>, gre:&
     });
 
     println!("writing image cfl");
-    let out_img = out_cfl.as_ref().with_file_name("img.cfl");
+    let out_img = out_cfl.with_file_name(format!("{SEQ_NAME}_img"));
     array_lib::io_cfl::write_cfl(out_img,&vol_data,vol_data_dims);
+
+    println!("writing magnitude images");
+    vol_data.chunks_exact(vol_dim.numel()).enumerate().for_each(|(i,vol)|{
+        let out_img = out_cfl.with_file_name(format!("te_{i}_mag.nii"));
+        println!("{}",out_img.display());
+        let phase:Vec<_> = vol.iter().map(|x| x.to_polar().0).collect();
+        write_nifti(out_img,&phase,vol_dim);
+    });
 
     println!("writing phase images");
     vol_data.chunks_exact(vol_dim.numel()).enumerate().for_each(|(i,vol)|{
-        let out_img = out_cfl.as_ref().with_file_name(format!("te_{i}.nii"));
+        let out_img = out_cfl.with_file_name(format!("te_{i}_phase.nii"));
         println!("{}",out_img.display());
         let phase:Vec<_> = vol.iter().map(|x| x.to_polar().1).collect();
         write_nifti(out_img,&phase,vol_dim);
