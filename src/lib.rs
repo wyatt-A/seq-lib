@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::fs::{create_dir_all, File};
-use std::io;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use clap;
@@ -8,6 +7,8 @@ pub use seq_struct;
 use seq_struct::compile::{Seq, Timeline};
 use seq_struct::seq_loop::SeqLoop;
 use headfile::Headfile;
+use mrs_ppl::compile::{build_ppl, compile_ppl};
+use pulse_seq_view::run_viewer;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -18,11 +19,12 @@ pub mod q_calc;
 #[derive(clap::Parser)]
 pub struct Args {
 
-    /// parameter file to read or write
-    pub param_file: PathBuf,
-
     /// base directory to write files
     pub base_dir: PathBuf,
+
+    /// parameter file to read or write. Not required if finish is called (param file is in the acq directory)
+    #[arg(required_unless_present_any = ["finish"])]
+    pub param_file: Option<PathBuf>,
 
     /// display pulse sequence
     #[clap(long)]
@@ -40,13 +42,13 @@ pub struct Args {
     #[clap(long)]
     pub acquire: bool,
 
-    /// compile ppl for MRS simulation software
-    #[clap(long)]
-    pub sim: bool,
-
     /// run finish routine after acquire to write headfile and other resources
     #[clap(long)]
     pub finish: bool,
+
+    /// compile ppl for MRS simulation software
+    #[clap(long)]
+    pub sim: bool,
 
     /// do not compile ppl. Useful for testing without the scanner
     #[clap(short,long)]
@@ -63,6 +65,89 @@ impl Args {
     pub fn sim_dir(&self) -> PathBuf {
         self.base_dir.join("sim")
     }
+
+    pub fn run<T:PulseSequence>(self) {
+        let setup_dir = self.setup_dir();
+        let acq_dir = self.acq_dir();
+        let sim_dir = self.sim_dir();
+
+        if self.init {
+            let param_file = self.param_file.as_ref().expect("param file is not defined");
+            let gre = T::default();
+            gre.to_file(param_file);
+            return
+        }
+
+        if self.display {
+            let param_file = self.param_file.as_ref().expect("param file is not defined");
+            let mut gre = T::from_file(param_file);
+            gre.display_mode();
+            let seq_loop = gre.build_sequence();
+            let user_state = gre.adjustment_state();
+            let ps_data = seq_loop.render_timeline(&user_state).to_raw();
+            run_viewer(ps_data).unwrap();
+            return
+        }
+
+        if self.setup {
+            let param_file = self.param_file.as_ref().expect("param file is not defined");
+            let mut gre = T::from_file(param_file);
+            gre.gop_mode();
+            let seq_loop = gre.build_sequence();
+            create_dir_all(&setup_dir).unwrap();
+            build_ppl(&seq_loop, &setup_dir, T::seq_name(), false);
+            gre.to_file(setup_dir.join(T::seq_name()));
+            let hf = gre.headfile();
+            hf.to_file(&setup_dir.join(format!("{}_setup",T::seq_name()))).unwrap();
+            if self.skip_ppl_compile {
+                return
+            }
+            compile_ppl(&setup_dir);
+            return
+        }
+
+        if self.acquire {
+            let param_file = self.param_file.as_ref().expect("param file is not defined");
+            let mut gre = T::from_file(param_file);
+            gre.acq_mode();
+            let seq_loop = gre.build_sequence();
+            create_dir_all(&acq_dir).unwrap();
+            build_ppl(&seq_loop, &acq_dir, T::seq_name(), false);
+            gre.to_file(acq_dir.join(T::seq_name()));
+            if self.skip_ppl_compile {
+                return
+            }
+            compile_ppl(&acq_dir);
+            // copy ppl params
+            // run acquisition
+            return
+        }
+
+        if self.finish {
+            let mut gre = T::from_file(acq_dir.join(T::seq_name()));
+            gre.finish_acquisition(&acq_dir);
+            gre.to_file(acq_dir.join(T::seq_name()));
+            let mut hf = gre.headfile();
+            hf.write_timestamp();
+            hf.to_file(&acq_dir.join(T::seq_name())).unwrap();
+            return
+        }
+
+        if self.sim {
+            let param_file = self.param_file.as_ref().expect("param file is not defined");
+            let mut gre = T::from_file(param_file);
+            gre.sim_mode();
+            let seq_loop = gre.build_sequence();
+            create_dir_all(&sim_dir).unwrap();
+            gre.to_file(sim_dir.join(T::seq_name()));
+            build_ppl(&seq_loop, &sim_dir, T::seq_name(), true);
+            compile_ppl(&sim_dir);
+            return
+        }
+    }
+
+
+
 }
 
 pub mod defs {
@@ -94,11 +179,23 @@ pub mod defs {
 }
 
 /// Specifies a data structure that compiles to a pulse sequence
-pub trait PulseSequence: Default {
+pub trait PulseSequence: Default + ToHeadfile {
     /// main pulse sequence generation routine. This is where all the pulse sequence logic is
     /// implemented
     fn build_sequence(&mut self) -> SeqLoop;
     fn adjustment_state(&self) -> HashMap<String,f64>;
+
+    /// run a finishing routine to format data and calculate additional parameters
+    fn finish_acquisition(&mut self, acq_dir: impl AsRef<Path>);
+
+    /// set the pulse sequence to gain optimization mode (setup mode)
+    fn gop_mode(&mut self);
+    /// set the pulse sequence to acquire mode
+    fn acq_mode(&mut self);
+    /// set the pulse sequence to display mode for plotting
+    fn display_mode(&mut self);
+    /// set the pulse sequence to simulation mode for MRS hardware simulation
+    fn sim_mode(&mut self);
 
     fn render_timeline(&mut self,state:&HashMap<String,f64>) -> Timeline {
         self.build_sequence().render_timeline(state)
@@ -123,6 +220,8 @@ pub trait ToHeadfile: TOML {
         h.insert_toml_table(&tab,false);
         h
     }
+
+    fn seq_name() -> &'static str;
 }
 
 pub trait TOML: Serialize + DeserializeOwned {

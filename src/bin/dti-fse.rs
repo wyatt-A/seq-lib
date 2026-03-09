@@ -18,12 +18,12 @@ use seq_struct::seq_loop::{Orientations, SeqLoop};
 use seq_struct::variable::LUT;
 use seq_struct::waveform::Waveform;
 use seq_lib::grad_pulses::{ramp_down, ramp_up, trapezoid};
-use seq_lib::PulseSequence;
+use seq_lib::{PulseSequence, ToHeadfile, TOML};
 use seq_lib::rf_pulses::{hardpulse, hardpulse_composite};
 use seq_lib::q_calc::{calc_b_matrix, grad_solve, load_bvecs};
 use rayon::prelude::*;
-
-
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::de::DeserializeOwned;
 // shorthand types
 
 /// Gradient waveform
@@ -65,8 +65,8 @@ const ACQT: &str = "acqt";
 const PETL: &str = "pet_left";
 const PETR: &str = "pet_right";
 
-
-#[derive(Debug,Clone)]
+const SEQ_NAME: &str = "dti_fse";
+#[derive(Debug,Clone,Serialize,Deserialize)]
 struct DTIFse {
     /// determines the mode to compile the sequence in
     mode: Mode,
@@ -85,6 +85,7 @@ struct DTIFse {
     cs_table: PathBuf,
     bvec_table: PathBuf,
     target_bvalues: Vec<f64>,
+
 }
 
 impl Default for DTIFse {
@@ -187,7 +188,7 @@ struct EventControllers {
     crush_right_x: GS,
 }
 
-#[derive(Clone,Debug)]
+#[derive(Clone,Debug,Serialize,Deserialize)]
 enum Mode {
     /// used to acquire image support region for each echo to measure phase errors.
     /// The y-z FOV should match the size of the object to gather accurate phase information due to very low matrix size in y-z
@@ -432,6 +433,14 @@ impl Events {
     }
 }
 
+impl ToHeadfile for DTIFse {
+    fn seq_name() -> &'static str {
+        SEQ_NAME
+    }
+}
+
+impl TOML for DTIFse {}
+
 impl PulseSequence for DTIFse {
     fn build_sequence(&mut self) -> SeqLoop {
 
@@ -538,6 +547,26 @@ impl PulseSequence for DTIFse {
             }
         }
         state
+    }
+
+    fn finish_acquisition(&mut self, acq_dir: impl AsRef<Path>) {
+
+    }
+
+    fn gop_mode(&mut self) {
+
+    }
+
+    fn acq_mode(&mut self) {
+
+    }
+
+    fn display_mode(&mut self) {
+
+    }
+
+    fn sim_mode(&mut self) {
+
     }
 }
 

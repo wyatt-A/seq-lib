@@ -28,84 +28,7 @@ use seq_lib::grad_pulses::scale_factors::{HALF_SIN_SCALE, QUARTER_SIN_SCALE};
 const SEQ_NAME: &str = "gre";
 
 fn main() {
-
-    let args = Args::parse();
-
-    let setup_dir = args.setup_dir();
-    let acq_dir = args.acq_dir();
-    let sim_dir = args.sim_dir();
-
-    if args.init {
-        let gre = Gre::default();
-        gre.to_file(args.param_file);
-        return
-    }
-
-    if args.display {
-        let mut gre = Gre::from_file(args.param_file);
-        gre.gop_mode = false;
-        gre.sim_mode = true;
-        let seq_loop = gre.build_sequence();
-        let user_state = gre.adjustment_state();
-        let ps_data = seq_loop.render_timeline(&user_state).to_raw();
-        run_viewer(ps_data).unwrap();
-        return
-    }
-
-    if args.setup {
-        let mut gre = Gre::from_file(args.param_file);
-        gre.gop_mode = true;
-        let seq_loop = gre.build_sequence();
-        create_dir_all(&setup_dir).unwrap();
-        build_ppl(&seq_loop, &setup_dir, SEQ_NAME, false);
-        gre.to_file(setup_dir.join(SEQ_NAME));
-        let hf = gre.headfile();
-        hf.to_file(&setup_dir.join(format!("{SEQ_NAME}_setup"))).unwrap();
-        if args.skip_ppl_compile {
-            return
-        }
-        compile_ppl(&setup_dir);
-        return
-    }
-
-    if args.acquire {
-        let mut gre = Gre::from_file(args.param_file);
-        gre.gop_mode = false;
-        let seq_loop = gre.build_sequence();
-        create_dir_all(&acq_dir).unwrap();
-        build_ppl(&seq_loop, &acq_dir, SEQ_NAME, false);
-        gre.to_file(acq_dir.join(SEQ_NAME));
-        if args.skip_ppl_compile {
-            return
-        }
-        compile_ppl(&acq_dir);
-        // copy ppl params
-        // run acquisition
-        return
-    }
-
-    if args.finish {
-        let mut gre = Gre::from_file(acq_dir.join(SEQ_NAME));
-        finish_acquisition(&mut gre, &acq_dir);
-        gre.to_file(acq_dir.join(SEQ_NAME));
-        let mut hf = gre.headfile();
-        hf.write_timestamp();
-        hf.to_file(&acq_dir.join(SEQ_NAME)).unwrap();
-        return
-    }
-
-    if args.sim {
-        let mut gre = Gre::from_file(args.param_file);
-        gre.gop_mode = false;
-        gre.sim_mode = true;
-        let seq_loop = gre.build_sequence();
-        create_dir_all(&sim_dir).unwrap();
-        gre.to_file(sim_dir.join(SEQ_NAME));
-        build_ppl(&seq_loop, &sim_dir, SEQ_NAME, true);
-        compile_ppl(&sim_dir);
-        return
-    }
-
+    Args::parse().run::<Gre>();
 }
 
 
@@ -233,6 +156,10 @@ impl ToHeadfile for Gre {
         }
         h
     }
+
+    fn seq_name() -> &'static str {
+        SEQ_NAME
+    }
 }
 
 impl TOML for Gre {}
@@ -327,6 +254,27 @@ impl PulseSequence for Gre {
         s.insert(RF_POWER.to_string(),1.0);
         s.insert("gpre".to_string(),0.);
         s
+    }
+
+    fn finish_acquisition(&mut self, acq_dir: impl AsRef<Path>) {
+        finish_acq(self,acq_dir);
+    }
+
+    fn gop_mode(&mut self) {
+        self.gop_mode = true;
+    }
+
+    fn acq_mode(&mut self) {
+        self.gop_mode = false;
+        self.sim_mode = false;
+    }
+
+    fn display_mode(&mut self) {
+        self.gop_mode = false;
+    }
+
+    fn sim_mode(&mut self) {
+        self.sim_mode = true;
     }
 }
 
@@ -607,7 +555,7 @@ impl Events {
 }
 
 /// format and analyze k-space data for recon. This fills in extra parameters
-fn finish_acquisition(gre:&mut Gre, acq_dir:impl AsRef<Path>) {
+fn finish_acq(gre:&mut Gre, acq_dir:impl AsRef<Path>) {
 
 
     // size of gridded data set
@@ -629,10 +577,9 @@ fn finish_acquisition(gre:&mut Gre, acq_dir:impl AsRef<Path>) {
         ]
     );
 
+    println!("loading raw data ...");
     let (raw_data, mrd_size, ..) = array_lib::io_mrd::read_mrd(acq_dir.as_ref().join(format!("{SEQ_NAME}.mrd")));
     assert_eq!(raw_data_dims.shape_squeeze(),mrd_size.shape_squeeze(),"unexpected raw data dimensions");
-
-    // read lut
 
     let s = read_to_string(acq_dir.as_ref().join("lut.txt")).unwrap();
     let entries:Vec<_> = s.lines().skip(gre.n_pspace_samples)
@@ -720,9 +667,11 @@ fn finish_acquisition(gre:&mut Gre, acq_dir:impl AsRef<Path>) {
     println!("writing ksp cfl");
     array_lib::io_cfl::write_cfl(&out_cfl,&vol_data,vol_data_dims);
 
+    println!("running fft ...");
     // do quick fft recon
     rs_fftn_batched(&mut vol_data,&vol_dim.shape_squeeze(),gre.n_pspace_samples,FftDirection::Inverse,NormalizationType::Unitary);
 
+    println!("shifting volumes ...");
     // fft shift volumes
     vol_data.chunks_exact_mut(vol_dim.numel()).for_each(|vol|{
         // fftshift vol into tmp, then write tmp back into vol
