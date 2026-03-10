@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use clap::Parser;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{Angle, FieldGrad, Freq, Length, Time};
 use mr_units::quantity::Unit;
@@ -15,12 +16,13 @@ use seq_struct::variable::LUT;
 use serde::{Deserialize, Serialize};
 use seq_lib::defs::{RFPhase, EXPERIMENT, GS, GW, RFP, VIEW};
 use seq_lib::grad_pulses::{ramp_up, trapezoid};
-use seq_lib::{PulseSequence, ToHeadfile, TOML};
+use seq_lib::{Args, PulseSequence, ToHeadfile, TOML};
 use seq_lib::q_calc::{grad_solve, load_bvecs};
 use seq_lib::rf_pulses::{hardpulse, hardpulse_composite};
 
 fn main() {
-
+    let args = Args::parse();
+    args.run::<DTI>();
 }
 
 const SEQ_NAME: &str = "dti";
@@ -28,6 +30,7 @@ const SEQ_NAME: &str = "dti";
 struct DTI {
     /// determines the mode to compile the sequence in
     setup_mode: bool,
+    sim_mode: bool,
     /// solve mode calculates the required g_max for the desired diffusion weighting
     solve_mode: bool,
     bandwidth_khz: f64,
@@ -58,6 +61,7 @@ impl Default for DTI {
     fn default() -> Self {
         DTI {
             setup_mode: false,
+            sim_mode: false,
             solve_mode: false,
             bandwidth_khz: 100.,
             fov_mm: [25.6, 12.8,12.8],
@@ -86,7 +90,6 @@ impl Default for DTI {
 
 impl DTI {
 
-
     fn read_bvecs(&mut self) {
         let (shell_idx,b_vecs) = load_bvecs(&self.bvec_table);
         assert_eq!(shell_idx.len(), self.target_bvalues.len(),"number of target b-values does not match b-vector length");
@@ -108,10 +111,14 @@ impl DTI {
         coords
     }
 
+    /// build the view loop in one of two modes. Solve mode renders a single view with a variable
+    /// x diffusion gradient to solve for gradient strengths
     fn view_loop(&mut self) -> SeqLoop {
 
         let n_views = if self.solve_mode {
             1
+        }else if self.sim_mode {
+            4
         }else {
             self.read_pe_table();
             self.n_phase.unwrap()
@@ -160,7 +167,6 @@ impl DTI {
         vl.set_averages(1);
         vl.set_rep_time(Time::ms(self.rep_time_ms)).expect("failed to set rep time");
 
-
         let te = vl.get_time_span(Events::exc(),Events::acq(),50,50).expect("failed to get echo time");
         println!("min echo time: {} ms",te.as_ms());
         self.echo_time_ms = Some(te.as_ms());
@@ -179,7 +185,6 @@ impl TOML for DTI {}
 
 impl PulseSequence for DTI {
     fn build_sequence(&mut self) -> SeqLoop {
-
 
         self.read_bvecs();
 
@@ -238,11 +243,11 @@ impl PulseSequence for DTI {
     }
 
     fn display_mode(&mut self) {
-        todo!()
+        self.sim_mode = true;
     }
 
     fn sim_mode(&mut self) {
-        todo!()
+        self.sim_mode = true;
     }
 }
 
@@ -306,7 +311,6 @@ impl EventControllers {
             let mut gx_lut = vec![];
             let mut gy_lut = vec![];
             let mut gz_lut = vec![];
-
 
             let shell_idx = dti.shell_idx.as_ref().unwrap();
             dti.dg_x_dir.as_ref().unwrap().iter().zip(dti.dg_y_dir.as_ref().unwrap().iter()).zip(dti.dg_z_dir.as_ref().unwrap().iter()).enumerate().for_each(|(i,((&ux,&uy),&uz))| {

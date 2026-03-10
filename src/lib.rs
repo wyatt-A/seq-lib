@@ -20,10 +20,12 @@ pub mod q_calc;
 pub struct Args {
 
     /// base directory to write files
-    pub base_dir: PathBuf,
+    #[arg(required_unless_present_any = ["init"])]
+    pub base_dir: Option<PathBuf>,
 
     /// parameter file to read or write. Not required if finish is called (param file is in the acq directory)
     #[arg(required_unless_present_any = ["finish"])]
+    #[clap(short, long)]
     pub param_file: Option<PathBuf>,
 
     /// display pulse sequence
@@ -57,19 +59,17 @@ pub struct Args {
 
 impl Args {
     pub fn setup_dir(&self) -> PathBuf {
-        self.base_dir.join("setup")
+        self.base_dir.as_ref().unwrap().join("setup")
     }
     pub fn acq_dir(&self) -> PathBuf {
-        self.base_dir.join("acq")
+        self.base_dir.as_ref().unwrap().join("acq")
     }
     pub fn sim_dir(&self) -> PathBuf {
-        self.base_dir.join("sim")
+        self.base_dir.as_ref().unwrap().join("sim")
     }
 
     pub fn run<T:PulseSequence>(self) {
-        let setup_dir = self.setup_dir();
-        let acq_dir = self.acq_dir();
-        let sim_dir = self.sim_dir();
+
 
         if self.init {
             let param_file = self.param_file.as_ref().expect("param file is not defined");
@@ -77,6 +77,10 @@ impl Args {
             gre.to_file(param_file);
             return
         }
+
+        let setup_dir = self.setup_dir();
+        let acq_dir = self.acq_dir();
+        let sim_dir = self.sim_dir();
 
         if self.display {
             let param_file = self.param_file.as_ref().expect("param file is not defined");
