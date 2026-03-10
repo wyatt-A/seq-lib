@@ -99,13 +99,13 @@ impl Args {
             gre.gop_mode();
             let seq_loop = gre.build_sequence();
             create_dir_all(&setup_dir).unwrap();
-            build_ppl(&seq_loop, &setup_dir, T::seq_name(), false);
             gre.to_file(setup_dir.join(T::seq_name()));
             let hf = gre.headfile();
             hf.to_file(&setup_dir.join(format!("{}_setup",T::seq_name()))).unwrap();
             if self.skip_ppl_compile {
                 return
             }
+            build_ppl(&seq_loop, &setup_dir, T::seq_name(), false);
             compile_ppl(&setup_dir);
             return
         }
@@ -144,6 +144,9 @@ impl Args {
             let seq_loop = gre.build_sequence();
             create_dir_all(&sim_dir).unwrap();
             gre.to_file(sim_dir.join(T::seq_name()));
+            if self.skip_ppl_compile {
+                return
+            }
             build_ppl(&seq_loop, &sim_dir, T::seq_name(), true);
             compile_ppl(&sim_dir);
             return

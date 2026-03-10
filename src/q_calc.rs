@@ -58,8 +58,7 @@ pub fn grad_solve(s:&SeqLoop, mut adj_state:HashMap<String,f64>, adj_var:&str, t
 
 }
 
-pub fn calc_b_matrix<P:PulseSequence>(p:&mut P, adj_state:&HashMap<String,f64>, inv_pulses_labels:&[&str], echo_time:Time, nucleus: Nucleus) -> BMat {
-    let s = p.build_sequence();
+pub fn calc_b_matrix(s:&SeqLoop, adj_state:&HashMap<String,f64>, inv_pulses_labels:&[&str], echo_time:Time, nucleus: Nucleus) -> BMat {
     // get the center point of each inversion pulse
     let mut inv_pulse_times:Vec<_> = inv_pulses_labels.iter().flat_map(|inv_pulse|{
         s.find_occurrences(inv_pulse,50).into_iter().map(|t|t.as_sec())
