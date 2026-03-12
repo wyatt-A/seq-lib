@@ -53,7 +53,7 @@ struct DTI {
     /// diffusion gradient duration in milliseconds
     little_delta_ms: f64,
     /// diffusion gradient separation in milliseconds
-    big_delta_ms: f64,
+    big_delta_ms: Option<f64>,
     /// repetition time in milliseconds
     rep_time_ms: f64,
     /// user-defined upper limit for diffusion gradients in tesla per meter
@@ -109,7 +109,7 @@ impl Default for DTI {
             imaging_ramp_time_us: 200,
             phase_enc_dur_ms: 0.3,
             little_delta_ms: 1.7,
-            big_delta_ms: 5.,
+            big_delta_ms: None,
             rep_time_ms: 100.,
             g_limit_tpm: 2.3,
             post_diff2_delay_ms: 1.,
@@ -195,14 +195,14 @@ impl DTI {
         view_loop.set_min_time_span(Events::exc(), Events::diff1(), 100, 0, post_rf_del).unwrap();
         view_loop.set_min_time_span(Events::refoc(), Events::diff2(), 100, 0, post_rf_del).unwrap();
 
-        // set diffusion pulse separation (big delta)
-        let big_delta = Time::ms(self.big_delta_ms);
-        if let Ok(delta) = view_loop.set_min_time_span(Events::diff1(), Events::diff2(), 0, 0, big_delta) {
-            println!("set big delta to {} ms",delta.as_ms());
-            self.big_delta_ms = delta.as_ms();
-        }else {
-            panic!("failed to set big delta ms");
-        }
+        // // set diffusion pulse separation (big delta)
+        // let big_delta = Time::ms(self.big_delta_ms);
+        // if let Ok(delta) = view_loop.set_min_time_span(Events::diff1(), Events::diff2(), 0, 0, big_delta) {
+        //     println!("set big delta to {} ms",delta.as_ms());
+        //     self.big_delta_ms = delta.as_ms();
+        // }else {
+        //     panic!("failed to set big delta ms");
+        // }
 
         // set delay between second diffusion pulse and phase encoding
         let post_diff2_del = Time::ms(self.post_diff2_delay_ms);
@@ -217,13 +217,23 @@ impl DTI {
         view_loop.set_min_time_span(Events::acq(), Events::ro_rd(), 100, 0, Time::us(50)).unwrap();
         view_loop.set_time_span(Events::ro_rd(), Events::spoil(), 100, 0, Time::us(50)).unwrap();
 
-        // set repetition time for view loop
-        view_loop.set_rep_time(Time::ms(self.rep_time_ms)).expect("failed to set rep time");
+
+
+
+        // determine tau based on refocusing pulse and center of acq
+        let tau = view_loop.get_time_span(Events::refoc(),Events::acq(),50,50).expect("failed to get tau");
+        view_loop.set_time_span(Events::exc(),Events::refoc(),50,50, tau).expect("failed to set tau");
+
+        let big_delta = view_loop.get_time_span(Events::diff1(),Events::diff2(),0,0).expect("failed to get big delta");
+        self.big_delta_ms = Some(big_delta.as_ms());
 
         // determine the echo time based on event locations
         let te = view_loop.get_time_span(Events::exc(), Events::acq(), 50, 50).expect("failed to get echo time");
         println!("min echo time: {} ms",te.as_ms());
         self.echo_time_ms = Some(te.as_ms());
+
+        // set repetition time for view loop
+        view_loop.set_rep_time(Time::ms(self.rep_time_ms)).expect("failed to set rep time");
 
         // return the view loop
         view_loop
@@ -254,11 +264,11 @@ impl DTI {
             let ux = b[0];
             let uy = b[1];
             let uz = b[2];
-            let g_mtpm = self.g_max_tpm.as_ref().unwrap()[shell_idx[i]];
+            let g_tpm = self.g_max_tpm.as_ref().unwrap()[shell_idx[i]];
             // scale by b-vector
-            let gx = FieldGrad::mt_per_meter(g_mtpm).scale(ux);
-            let gy = FieldGrad::mt_per_meter(g_mtpm).scale(uy);
-            let gz = FieldGrad::mt_per_meter(g_mtpm).scale(uz);
+            let gx = FieldGrad::tesla_per_meter(g_tpm).scale(ux);
+            let gy = FieldGrad::tesla_per_meter(g_tpm).scale(uy);
+            let gz = FieldGrad::tesla_per_meter(g_tpm).scale(uz);
             g_vecs_tpm.push([gx.si(),gy.si(),gz.si()]);
         });
         self.g_vecs_tpm = Some(g_vecs_tpm);
@@ -448,8 +458,7 @@ impl EventControllers {
         let exc_pow = EventControl::<f64>::new().with_adj(Self::exp_pow()).to_shared();
         let ref_pow = EventControl::<f64>::new().with_adj(Self::ref_pow()).to_shared();
         // base phase is 90 deg from excitation phase with a 180 deg chop every view
-        let ref_phase = EventControl::<Angle>::new().with_source_loop(VIEW)
-            .with_mod(2).with_scale(Angle::deg(180)).with_constant(Angle::deg(90.0)).to_shared();
+        let ref_phase = EventControl::<Angle>::new().with_constant(Angle::deg(0.0)).to_shared();
         let dt = Freq::khz(dti.spectral_width_khz).inv();
         let gro = FieldGrad::from_fov(Length::mm(dti.fov_mm[0]),dt,Nuc1H);
         let readout = EventControl::<FieldGrad>::new().with_constant_grad(gro).to_shared();
@@ -479,10 +488,10 @@ impl EventControllers {
         }else {
             // build LUTs for diffusion encoding
             // determine g_max from the table
-            let g_max_mtpm = *dti.g_max_tpm.as_ref().unwrap().iter().max_by(|a, b|a.partial_cmp(&b).unwrap()).unwrap();
+            let g_max_tpm = *dti.g_max_tpm.as_ref().unwrap().iter().max_by(|a, b|a.partial_cmp(&b).unwrap()).unwrap();
 
             // discretize the diffusion gradient steps based on g_max
-            let diff_grad_resolution = FieldGrad::mt_per_meter(g_max_mtpm / i16::MAX as f64); // grad strength per step
+            let diff_grad_resolution = FieldGrad::tesla_per_meter(g_max_tpm / i16::MAX as f64); // grad strength per step
 
             // build lookup tables for diffusion gradient scaling (similar to spatial encoding)
             let mut gx_lut = vec![];
@@ -515,10 +524,25 @@ impl EventControllers {
 
         };
 
-        let (phase_enc_y,phase_enc_z) = if dti.solve_mode | dti.setup_mode {
+
+        let (phase_enc_y,phase_enc_z) = if dti.solve_mode {
             (
                 EventControl::<FieldGrad>::new().with_constant_grad(FieldGrad::mt_per_meter(0)).to_shared(),
                 EventControl::<FieldGrad>::new().with_constant_grad(FieldGrad::mt_per_meter(0)).to_shared(),
+            )
+        }else if dti.setup_mode {
+            let coords = dti.read_pe_table();
+            let mut phase_y = vec![];
+            let mut phase_z = vec![];
+            coords.iter().for_each(|_|{
+                phase_y.push(0);
+                phase_z.push(0);
+            });
+            let pey_lut = LUT::new("pe_y",&phase_y).to_shared();
+            let pez_lut = LUT::new("pe_z",&phase_z).to_shared();
+            (
+                EventControl::<FieldGrad>::new().with_source_loop(VIEW).with_lut(&pey_lut).with_grad_scale(pe_step_y).to_shared(),
+                EventControl::<FieldGrad>::new().with_source_loop(VIEW).with_lut(&pez_lut).with_grad_scale(pe_step_z).to_shared()
             )
         }else {
             let coords = dti.read_pe_table();
@@ -682,7 +706,7 @@ impl Waveforms {
 
         let diff = trapezoid(
             Time::us(dti.diffusion_ramp_time_us),
-            Time::ms((dti.little_delta_ms * 1e3) as usize - dti.diffusion_ramp_time_us),
+            Time::us((dti.little_delta_ms * 1e3) as usize - dti.diffusion_ramp_time_us),
             dt
         ).to_shared();
 
