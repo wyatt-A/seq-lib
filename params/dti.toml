@@ -1,0 +1,33 @@
+setup_mode = false
+sim_mode = false
+solve_mode = false
+fov_mm = [
+    25.6,
+    12.8,
+    12.8,
+]
+matrix_size = [
+    512,
+    256,
+    256,
+]
+spectral_width_khz = 100.0
+rf_duration_us = 100
+diffusion_ramp_time_us = 500
+imaging_ramp_time_us = 200
+phase_enc_dur_ms = 0.3
+little_delta_ms = 1.7
+big_delta_ms = 5.0
+rep_time_ms = 100.0
+g_limit_tpm = 2.1
+post_diff2_delay_ms = 1.0
+cs_table = "/Users/Wyatt/26.wang.06/stream_CS256_8x_pa18_pb54"
+bvec_table = "/Users/Wyatt/26.wang.06/bvecs.txt"
+target_bvalues = [
+    1000.0,
+    3000.0,
+    5000.0,
+    8000.0,
+    10000.0,
+    12000.0,
+]

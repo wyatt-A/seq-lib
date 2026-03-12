@@ -58,8 +58,8 @@ struct DTI {
     rep_time_ms: f64,
     /// user-defined upper limit for diffusion gradients in tesla per meter
     g_limit_tpm: f64,
-    /// delay after the second diffusion pulse, before phase encoding gradient in microseconds
-    post_diff2_delay_ms: usize,
+    /// delay after the second diffusion pulse, before phase encoding gradient in milliseconds
+    post_diff2_delay_ms: f64,
     /// path to cs table (ascii file with one integer per row in the order py1, pz1, py2, pz2, ... etc.)
     cs_table: PathBuf,
     /// path to b-vector table (ascii file with 4 entries per row: shell_idx, ux, uy, uz)
@@ -112,7 +112,7 @@ impl Default for DTI {
             big_delta_ms: 5.,
             rep_time_ms: 100.,
             g_limit_tpm: 2.3,
-            post_diff2_delay_ms: 100,
+            post_diff2_delay_ms: 1.,
             cs_table: PathBuf::from("/Users/Wyatt/26.wang.06/stream_CS256_8x_pa18_pb54"),
             bvec_table: PathBuf::from("/Users/Wyatt/26.wang.06/bvecs.txt"),
             target_bvalues: vec![1_000.,3_000.,5_000.,8_000.,10_000.,12_000.],
@@ -682,7 +682,7 @@ impl Waveforms {
 
         let diff = trapezoid(
             Time::us(dti.diffusion_ramp_time_us),
-            Time::ms(dti.little_delta_ms),
+            Time::ms((dti.little_delta_ms * 1e3) as usize - dti.diffusion_ramp_time_us),
             dt
         ).to_shared();
 
