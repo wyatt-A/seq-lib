@@ -15,22 +15,20 @@ use seq_struct::rf_pulse::RfPulse;
 use seq_struct::seq_loop::SeqLoop;
 use seq_struct::variable::LUT;
 use serde::{Deserialize, Serialize};
-use seq_lib::defs::{RFPhase, ECHO, GS, GW, RFP, VIEW};
+use seq_lib::defs::{RFPhase, GS, GW, RFP, SLICE, VIEW};
 use seq_lib::grad_pulses::{ramp_down, ramp_up, trapezoid};
 use seq_lib::{Args, PulseSequence, ToHeadfile, TOML};
 use seq_lib::q_calc::{calc_b_matrix, grad_solve, load_bvecs};
 use seq_lib::rf_pulses::{hardpulse, hardpulse_composite};
 
-const VIEW_PRECALC_MS: usize = 4;
-
 fn main() {
     let args = Args::parse();
-    args.run::<DTIH>();
+    args.run::<DTIVAR>();
 }
 
-const SEQ_NAME: &str = "dti_h";
+const SEQ_NAME: &str = "dti";
 #[derive(Debug,Clone,Serialize,Deserialize)]
-struct DTIH {
+struct DTIVAR {
     /// intended to compile the sequence with no phase encoding and user-adjustable diffusion gradients
     setup_mode: bool,
     /// compiles the sequence for use with display mode and with the MRS sequence simulator
@@ -95,9 +93,9 @@ struct DTIH {
     byz:Option<Vec<f64>>,
 }
 
-impl Default for DTIH {
+impl Default for DTIVAR {
     fn default() -> Self {
-        DTIH {
+        DTIVAR {
             setup_mode: false,
             sim_mode: false,
             solve_mode: false,
@@ -133,7 +131,7 @@ impl Default for DTIH {
     }
 }
 
-impl DTIH {
+impl DTIVAR {
 
     /// reads the b-vec table, checks validity, and populates b_vec and shell_idx parameters
     fn read_bvecs(&mut self) {
@@ -156,42 +154,40 @@ impl DTIH {
 
     /// build the view loop in one of two modes. Solve mode renders a single view with a variable
     /// x diffusion gradient to solve for gradient strengths
-    fn view_loop(&mut self) -> SeqLoop {
+    fn experiment_loop(&mut self) -> SeqLoop {
 
         // set the number of experiments depending on simulation or setup mode
-        let n_exp = if self.sim_mode {
-            2
-        }else if self.setup_mode {
+        let n_experiments = if self.sim_mode || self.solve_mode || self.setup_mode {
             1
         } else {
-            self.b_vecs.as_ref().unwrap().len()
+            self.shell_idx.as_ref().unwrap().len()
         };
 
         // build the sequence events for current state
         let events = Events::build(self);
 
-        // build the view loop as the echo loop to run internally
-        let mut view_loop = SeqLoop::new(ECHO, n_exp);
+        // build the view loop
+        let mut exp_loop = SeqLoop::new_main(SLICE, n_experiments);
         // add events
-        view_loop.add_event(events.exc).unwrap();
-        view_loop.add_event(events.diff1).unwrap();
-        view_loop.add_event(events.refoc).unwrap();
-        view_loop.add_event(events.diff2).unwrap();
-        view_loop.add_event(events.pe).unwrap();
-        view_loop.add_event(events.ro_ru).unwrap();
-        view_loop.add_event(events.acq).unwrap();
-        view_loop.add_event(events.ro_rd).unwrap();
-        view_loop.add_event(events.spoil).unwrap();
+        exp_loop.add_event(events.exc).unwrap();
+        exp_loop.add_event(events.diff1).unwrap();
+        exp_loop.add_event(events.refoc).unwrap();
+        exp_loop.add_event(events.diff2).unwrap();
+        exp_loop.add_event(events.pe).unwrap();
+        exp_loop.add_event(events.ro_ru).unwrap();
+        exp_loop.add_event(events.acq).unwrap();
+        exp_loop.add_event(events.ro_rd).unwrap();
+        exp_loop.add_event(events.spoil).unwrap();
 
         // pre-calc time to calculate view-dependent parameters
-        view_loop.set_pre_calc(Time::ms(4));
+        exp_loop.set_pre_calc(Time::ms(4));
 
         // delay after rf pulses, before diffusion gradient start
         let post_rf_del = Time::us(50);
 
         // place rf pulses relative to diffusion gradients
-        view_loop.set_min_time_span(Events::exc(), Events::diff1(), 100, 0, post_rf_del).unwrap();
-        view_loop.set_min_time_span(Events::refoc(), Events::diff2(), 100, 0, post_rf_del).unwrap();
+        exp_loop.set_min_time_span(Events::exc(), Events::diff1(), 100, 0, post_rf_del).unwrap();
+        exp_loop.set_min_time_span(Events::refoc(), Events::diff2(), 100, 0, post_rf_del).unwrap();
 
         // // set diffusion pulse separation (big delta)
         // let big_delta = Time::ms(self.big_delta_ms);
@@ -204,37 +200,34 @@ impl DTIH {
 
         // set delay between second diffusion pulse and phase encoding
         let post_diff2_del = Time::ms(self.post_diff2_delay_ms);
-        view_loop.set_time_span(Events::diff2(), Events::pe(), 100, 0, post_diff2_del).unwrap();
+        exp_loop.set_time_span(Events::diff2(), Events::pe(), 100, 0, post_diff2_del).unwrap();
 
         // set small delay after phase encoding and readout
         let post_pe_del = Time::us(50);
-        view_loop.set_time_span(Events::pe(), Events::ro_ru(), 100, 0, post_pe_del).unwrap();
+        exp_loop.set_time_span(Events::pe(), Events::ro_ru(), 100, 0, post_pe_del).unwrap();
 
         // set up sample acquisition
-        view_loop.set_min_time_span(Events::ro_ru(), Events::acq(), 100, 0, Time::us(50)).unwrap();
-        view_loop.set_min_time_span(Events::acq(), Events::ro_rd(), 100, 0, Time::us(50)).unwrap();
-        view_loop.set_time_span(Events::ro_rd(), Events::spoil(), 100, 0, Time::us(50)).unwrap();
-
-
-
+        exp_loop.set_min_time_span(Events::ro_ru(), Events::acq(), 100, 0, Time::us(50)).unwrap();
+        exp_loop.set_min_time_span(Events::acq(), Events::ro_rd(), 100, 0, Time::us(50)).unwrap();
+        exp_loop.set_time_span(Events::ro_rd(), Events::spoil(), 100, 0, Time::us(50)).unwrap();
 
         // determine tau based on refocusing pulse and center of acq
-        let tau = view_loop.get_time_span(Events::refoc(),Events::acq(),50,50).expect("failed to get tau");
-        view_loop.set_time_span(Events::exc(),Events::refoc(),50,50, tau).expect("failed to set tau");
+        let tau = exp_loop.get_time_span(Events::refoc(), Events::acq(), 50, 50).expect("failed to get tau");
+        exp_loop.set_time_span(Events::exc(), Events::refoc(), 50, 50, tau).expect("failed to set tau");
 
-        let big_delta = view_loop.get_time_span(Events::diff1(),Events::diff2(),0,0).expect("failed to get big delta");
+        let big_delta = exp_loop.get_time_span(Events::diff1(), Events::diff2(), 0, 0).expect("failed to get big delta");
         self.big_delta_ms = Some(big_delta.as_ms());
 
         // determine the echo time based on event locations
-        let te = view_loop.get_time_span(Events::exc(), Events::acq(), 50, 50).expect("failed to get echo time");
+        let te = exp_loop.get_time_span(Events::exc(), Events::acq(), 50, 50).expect("failed to get echo time");
         println!("min echo time: {} ms",te.as_ms());
         self.echo_time_ms = Some(te.as_ms());
 
         // set repetition time for view loop
-        view_loop.set_rep_time(Time::ms(self.rep_time_ms)).expect("failed to set rep time");
+        exp_loop.set_rep_time(Time::ms(self.rep_time_ms)).expect("failed to set rep time");
 
         // return the view loop
-        view_loop
+        exp_loop
     }
 
     /// calculates max gradient strength for each b-vector and stores it as an internal parameter
@@ -315,7 +308,7 @@ impl DTIH {
 
 }
 
-impl ToHeadfile for DTIH {
+impl ToHeadfile for DTIVAR {
     fn headfile(&self) -> Headfile {
 
 
@@ -356,9 +349,9 @@ impl ToHeadfile for DTIH {
     }
 }
 
-impl TOML for DTIH {}
+impl TOML for DTIVAR {}
 
-impl PulseSequence for DTIH {
+impl PulseSequence for DTIVAR {
     fn build_sequence(&mut self) -> SeqLoop {
 
         // load the b-vector table
@@ -367,37 +360,41 @@ impl PulseSequence for DTIH {
         // set solve mode to true to trigger correct event configuration
         self.solve_mode = true;
         // render the view loop in 'solve mode'
-        let view_loop = self.view_loop();
+        let exp_loop = self.experiment_loop();
 
         // instantiate tunable parameters
         let mut adj = self.adjustment_state();
 
         // calculate the max gradien strengths for target b-values
-        self.calc_gmax(&view_loop, &mut adj);
+        self.calc_gmax(&exp_loop, &mut adj);
         // calculate and store the gradient vector table
         self.calc_g_vectors();
         // calculate b-matrix and cross terms for reconstruction
-        self.calc_b_matrix(&view_loop, &mut adj);
+        self.calc_b_matrix(&exp_loop, &mut adj);
 
         // turn off solve mode and re-build the view loop with new gradient info
         self.solve_mode = false;
-        let view_loop = self.view_loop();
+        let exp_loop = self.experiment_loop();
 
-        let n_views = if self.sim_mode | self.solve_mode {
+        // single view for solve mode and sim mode
+        let n_views = if self.solve_mode {
+            1
+        }else if self.sim_mode {
             1
         }else if self.setup_mode {
-            10000
-        }else {
+            10000 // arbitrary number of views for setup mode (no phase encoding)
+        } else {
+            self.read_pe_table(); // determines the number of views from the cs table
             self.n_phase.unwrap()
         };
 
         // define the parent 'Experiment' loop
-        let mut el = SeqLoop::new_main(VIEW, n_views);
+        let mut vl = SeqLoop::new(VIEW, n_views);
         // give experiment loop 1 ms to lookup values for diffusion encoding
-        el.set_pre_calc(Time::ms(VIEW_PRECALC_MS));
+        vl.set_pre_calc(Time::ms(1));
         // insert view loop into parent 'Experiment' loop for diffusion encoding
-        el.add_loop(view_loop).unwrap();
-        el
+        vl.add_loop(exp_loop).unwrap();
+        vl
 
     }
 
@@ -450,7 +447,7 @@ struct EventControllers {
 }
 
 impl EventControllers {
-    fn build(dti:&mut DTIH) -> EventControllers {
+    fn build(dti:&mut DTIVAR) -> EventControllers {
 
         let exc_pow = EventControl::<f64>::new().with_adj(Self::exp_pow()).to_shared();
         let ref_pow = EventControl::<f64>::new().with_adj(Self::ref_pow()).to_shared();
@@ -514,9 +511,9 @@ impl EventControllers {
             let gz_lut = LUT::new("diff_gz",&gz_lut).to_shared();
 
             (
-                EventControl::<FieldGrad>::new().with_source_loop(ECHO).with_lut(&gx_lut).with_grad_scale(diff_grad_resolution).to_shared(),
-                EventControl::<FieldGrad>::new().with_source_loop(ECHO).with_lut(&gy_lut).with_grad_scale(diff_grad_resolution).to_shared(),
-                EventControl::<FieldGrad>::new().with_source_loop(ECHO).with_lut(&gz_lut).with_grad_scale(diff_grad_resolution).to_shared(),
+                EventControl::<FieldGrad>::new().with_source_loop(SLICE).with_lut(&gx_lut).with_grad_scale(diff_grad_resolution).to_shared(),
+                EventControl::<FieldGrad>::new().with_source_loop(SLICE).with_lut(&gy_lut).with_grad_scale(diff_grad_resolution).to_shared(),
+                EventControl::<FieldGrad>::new().with_source_loop(SLICE).with_lut(&gz_lut).with_grad_scale(diff_grad_resolution).to_shared(),
             )
 
         };
@@ -612,7 +609,7 @@ struct Events {
 
 impl Events {
 
-    fn build(dti:&mut DTIH) -> Events {
+    fn build(dti:&mut DTIVAR) -> Events {
         let w = Waveforms::build(dti);
         let ec = EventControllers::build(dti);
         let exc = RfEvent::new(Self::exc(),&w.exc,&ec.exc_pow);
@@ -685,7 +682,7 @@ struct Waveforms {
 }
 
 impl Waveforms {
-    fn build(dti:&DTIH) -> Waveforms {
+    fn build(dti:&DTIVAR) -> Waveforms {
 
         let dt = Time::us(2);
 
