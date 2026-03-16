@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::fs::{create_dir_all, File};
+use std::fs::{create_dir_all, read_to_string, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use clap;
@@ -67,27 +67,31 @@ impl Args {
     pub fn sim_dir(&self) -> PathBuf {
         self.base_dir.as_ref().unwrap().join("sim")
     }
+    pub fn result_dir(&self) -> PathBuf {
+        self.base_dir.as_ref().unwrap().join("results")
+    }
 
     pub fn run<T:PulseSequence>(self) {
 
 
         if self.init {
             let param_file = self.param_file.as_ref().expect("param file is not defined");
-            let gre = T::default();
-            gre.to_file(param_file);
+            let seq = T::default();
+            seq.to_file(param_file);
             return
         }
 
         let setup_dir = self.setup_dir();
         let acq_dir = self.acq_dir();
         let sim_dir = self.sim_dir();
+        let result_dir = self.result_dir();
 
         if self.display {
             let param_file = self.param_file.as_ref().expect("param file is not defined");
-            let mut gre = T::from_file(param_file);
-            gre.display_mode();
-            let seq_loop = gre.build_sequence();
-            let user_state = gre.adjustment_state();
+            let mut seq = T::from_file(param_file);
+            seq.display_mode();
+            let seq_loop = seq.build_sequence();
+            let user_state = seq.adjustment_state();
             let ps_data = seq_loop.render_timeline(&user_state).to_raw();
             run_viewer(ps_data).unwrap();
             return
@@ -95,12 +99,12 @@ impl Args {
 
         if self.setup {
             let param_file = self.param_file.as_ref().expect("param file is not defined");
-            let mut gre = T::from_file(param_file);
-            gre.gop_mode();
-            let seq_loop = gre.build_sequence();
+            let mut seq = T::from_file(param_file);
+            seq.gop_mode();
+            let seq_loop = seq.build_sequence();
             create_dir_all(&setup_dir).unwrap();
-            gre.to_file(setup_dir.join(T::seq_name()));
-            let hf = gre.headfile();
+            seq.to_file(setup_dir.join(T::seq_name()));
+            let hf = seq.headfile();
             hf.to_file(&setup_dir.join(format!("{}_setup",T::seq_name()))).unwrap();
             if self.skip_ppl_compile {
                 return
@@ -112,12 +116,12 @@ impl Args {
 
         if self.acquire {
             let param_file = self.param_file.as_ref().expect("param file is not defined");
-            let mut gre = T::from_file(param_file);
-            gre.acq_mode();
-            let seq_loop = gre.build_sequence();
+            let mut seq = T::from_file(param_file);
+            seq.acq_mode();
+            let seq_loop = seq.build_sequence();
             create_dir_all(&acq_dir).unwrap();
             build_ppl(&seq_loop, &acq_dir, T::seq_name(), false);
-            gre.to_file(acq_dir.join(T::seq_name()));
+            seq.to_file(acq_dir.join(T::seq_name()));
             if self.skip_ppl_compile {
                 return
             }
@@ -128,22 +132,23 @@ impl Args {
         }
 
         if self.finish {
-            let mut gre = T::from_file(acq_dir.join(T::seq_name()));
-            gre.finish_acquisition(&acq_dir);
-            gre.to_file(acq_dir.join(T::seq_name()));
-            let mut hf = gre.headfile();
+            let mut seq = T::from_file(acq_dir.join(T::seq_name()));
+            create_dir_all(&result_dir).unwrap();
+            seq.finish_acquisition(&acq_dir, &result_dir);
+            seq.to_file(acq_dir.join(T::seq_name()));
+            let mut hf = seq.headfile();
             hf.write_timestamp();
-            hf.to_file(&acq_dir.join(T::seq_name())).unwrap();
+            hf.to_file(&result_dir.join(T::seq_name())).unwrap();
             return
         }
 
         if self.sim {
             let param_file = self.param_file.as_ref().expect("param file is not defined");
-            let mut gre = T::from_file(param_file);
-            gre.sim_mode();
-            let seq_loop = gre.build_sequence();
+            let mut seq = T::from_file(param_file);
+            seq.sim_mode();
+            let seq_loop = seq.build_sequence();
             create_dir_all(&sim_dir).unwrap();
-            gre.to_file(sim_dir.join(T::seq_name()));
+            seq.to_file(sim_dir.join(T::seq_name()));
             if self.skip_ppl_compile {
                 return
             }
@@ -191,10 +196,8 @@ pub trait PulseSequence: Default + ToHeadfile {
     /// implemented
     fn build_sequence(&mut self) -> SeqLoop;
     fn adjustment_state(&self) -> HashMap<String,f64>;
-
-    /// run a finishing routine to format data and calculate additional parameters
-    fn finish_acquisition(&mut self, acq_dir: impl AsRef<Path>);
-
+    /// runs a routine to finish the acquisition, writing data (results) to a results directory
+    fn finish_acquisition(&mut self, acq_dir: impl AsRef<Path>, results_dir: impl AsRef<Path>);
     /// set the pulse sequence to gain optimization mode (setup mode)
     fn gop_mode(&mut self);
     /// set the pulse sequence to acquire mode
@@ -251,4 +254,23 @@ pub trait TOML: Serialize + DeserializeOwned {
     fn to_toml_str(&self) -> String {
         toml::to_string_pretty(self).unwrap()
     }
+}
+
+/// retrieves the phase encoding table information from the acq dir
+pub fn get_pe_table(acq_dir: impl AsRef<Path>, skip_entries:usize) -> Vec<[isize;2]> {
+    let s = read_to_string(acq_dir.as_ref().join("lut.txt")).unwrap();
+    let entries:Vec<_> = s.lines().skip(skip_entries)
+        .map(|s| s.parse::<i32>().expect("failed to parse coordinate")).collect();
+
+    let coords:Vec<Vec<isize>> = entries.chunks_exact(8192).map(|x|{
+        x.iter().map(|x| *x as isize).collect()
+    }).collect();
+
+    let n = coords[0].len();
+
+    let mut pe_table = vec![];
+    for i in 0..n {
+        pe_table.push([coords[0][i],coords[1][i]]);
+    }
+    pe_table
 }

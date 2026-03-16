@@ -20,8 +20,6 @@ fn reco_prep_v2() {
     let matrix_size = [n_read,256,256];
     let n_exp = 7;
 
-
-
     let (raw_data, mrd_size, ..) = array_lib::io_mrd::read_mrd(acq_dir.join(format!("{seq_name}.MRD")));
     println!("{:?}",mrd_size);
 
@@ -47,7 +45,7 @@ fn reco_prep_v2() {
 
 }
 
-fn pe_table(acq_dir: impl AsRef<Path>,skip_entries:usize) -> Vec<[isize;2]> {
+fn pe_table(acq_dir: impl AsRef<Path>, skip_entries:usize) -> Vec<[isize;2]> {
     let s = read_to_string(acq_dir.as_ref().join("lut.txt")).unwrap();
     let entries:Vec<_> = s.lines().skip(skip_entries)
         .map(|s| s.parse::<i32>().expect("failed to parse coordinate")).collect();

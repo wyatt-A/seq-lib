@@ -11,7 +11,12 @@ use mr_units::quantity::Unit;
 use nalgebra::{Matrix3, SymmetricEigen};
 use seq_struct::compile::Seq;
 use seq_struct::seq_loop::SeqLoop;
-use crate::PulseSequence;
+
+/// tolerance for gradient strength solving
+const G_SOLVE_TOL:f64 =  1e-6;
+
+/// max number of iterations for gradient strength solving
+const G_SOLVE_MAX_ITER: usize = 100;
 
 /// loads b-vec file with format (shell_idx, ux, uy, uz)
 pub fn load_bvecs(file:impl AsRef<Path>) -> (Vec<usize>,Vec<[f64;3]>) {
@@ -27,20 +32,33 @@ pub fn load_bvecs(file:impl AsRef<Path>) -> (Vec<usize>,Vec<[f64;3]>) {
     (shell_idx,bvecs)
 }
 
-pub fn grad_solve(s:&SeqLoop, mut adj_state:HashMap<String,f64>, adj_var:&str, target_bval:f64, g_lower:FieldGrad, g_upper:FieldGrad, inv_pulses_labels:&[&str], echo_time:Time) -> FieldGrad {
-
+/// finds the timestamps in seconds of each inversion pulse according to their event labels
+/// in the pulse sequence loop 's'
+fn find_inversion_pulse_times_sec(s:&SeqLoop,inv_pulse_labels:&[impl AsRef<str>]) -> Vec<f64> {
     // get the center point of each inversion pulse
-    let mut inv_pulse_times:Vec<_> = inv_pulses_labels.iter().flat_map(|inv_pulse|{
-        s.find_occurrences(inv_pulse,50).into_iter().map(|t|t.as_sec())
+    let mut inv_pulse_times:Vec<_> = inv_pulse_labels.iter().flat_map(|inv_pulse|{
+        s.find_occurrences(inv_pulse.as_ref(),50).into_iter().map(|t|t.as_sec())
     }).collect();
     inv_pulse_times.sort_by(|a,b|a.si().partial_cmp(&b.si()).unwrap());
+    inv_pulse_times
+}
 
+
+/// finds the gradient strength of an adjustment variable to achieve a target b-value in s/mm^2
+pub fn grad_solve(s:&SeqLoop, mut adj_state:HashMap<String,f64>, adj_var:&str, target_bval:f64, g_lower:FieldGrad, g_upper:FieldGrad, inv_pulses_labels:&[&str], echo_time:Time) -> FieldGrad {
+
+    // recover the time points where magnetization is flipped from inversion pulses
+    let inv_pulse_times = find_inversion_pulse_times_sec(s,inv_pulses_labels);
+
+    // set up a function to calculate the b-value (b-matrix trace) as a function some gradient g
+    // this modifies the pulse sequence values to compute the b-matrix from
     let mut f = |g| {
         *adj_state.get_mut(adj_var).unwrap() = g;
         let w = s.render_timeline(&adj_state).render();
-        _calc_b_matrix(&w,&inv_pulse_times,echo_time.as_sec(), Nuc1H).trace()
+        compute_b_matrix(&w, &inv_pulse_times, echo_time.as_sec(), Nuc1H).trace()
     };
 
+    // examine upper and lower gradient limits to determine feasibility
     let b = f(g_lower.si());
     if b > target_bval {
         println!("min b-value for min gradient strength is {b} s/mm^2 bval");
@@ -49,44 +67,19 @@ pub fn grad_solve(s:&SeqLoop, mut adj_state:HashMap<String,f64>, adj_var:&str, t
         println!("unable to achieve target b-value {target_bval} s/mm^2 with max gradient strength {} T/m",g_upper.si());
         panic!("unable to achieve target b-value")
     }else {
-        let tolerance = 1e-6;
-        let max_iter = 100;
-        let grad_soltn = binary_solve(g_lower.si(),g_upper.si(),target_bval,tolerance,max_iter,f);
-        //println!("solved for gradient strength of {} mT/m", 1000. * grad_soltn);
+        // run binary solver to find the required gradient strength for the target b-value
+        let grad_soltn = binary_solve(g_lower.si(),g_upper.si(),target_bval,G_SOLVE_TOL,G_SOLVE_MAX_ITER,f);
         FieldGrad::tesla_per_meter(grad_soltn)
     }
 
 }
 
+/// computes the b-matrix for some sequence loop, given an adjustment state, any inversion pulses, and the echo time
 pub fn calc_b_matrix(s:&SeqLoop, adj_state:&HashMap<String,f64>, inv_pulses_labels:&[&str], echo_time:Time, nucleus: Nucleus) -> BMat {
-    // get the center point of each inversion pulse
-    let mut inv_pulse_times:Vec<_> = inv_pulses_labels.iter().flat_map(|inv_pulse|{
-        s.find_occurrences(inv_pulse,50).into_iter().map(|t|t.as_sec())
-    }).collect();
-    inv_pulse_times.sort_by(|a,b|a.si().partial_cmp(&b.si()).unwrap());
+    let inv_pulse_times = find_inversion_pulse_times_sec(s,inv_pulses_labels);
     let seq = s.render_timeline(adj_state).render();
-    _calc_b_matrix(&seq,&inv_pulse_times,echo_time.as_sec(), nucleus)
+    compute_b_matrix(&seq, &inv_pulse_times, echo_time.as_sec(), nucleus)
 }
-
-//    // define anonymous function to model the b-value as a function of the diffusion gradient along x-axis
-//     let f = |g| {
-//         *adj.get_mut("diff_x").unwrap() = g;
-//         let w = s.render_timeline(&adj).render();
-//         calc_b_matrix(&w,&t_inv,t_echoes[0],Nuc1H).trace()
-//     };
-//
-//     let gmax = 2.5; // T/m
-//     let bval = 7.; // s/mm^2
-//     let tolerance = 1e-6; // s/mm^2
-//     let max_iter = 100;
-//     // solve for the input gradient strength to achieve desired b-value within the limits of the system
-//     let grad_soltn = binary_solve(0.,gmax,bval,tolerance,max_iter,f);
-//     println!("solved for gradient strength of {} mT/m", 1000. * grad_soltn);
-
-
-
-
-
 
 /// calculate the phase accumulation q(t) from G(t) or G_eff(t) (T s m^-1)
 pub fn calc_phase(g:&[f64], t:&[f64], q:&mut [f64]) {
@@ -94,7 +87,6 @@ pub fn calc_phase(g:&[f64], t:&[f64], q:&mut [f64]) {
     assert_eq!(g.len(), q.len());
     cumtrapz(t, g, q);
 }
-
 
 /// calculate the b-factor of a nucleus given the square of phase accumulation q(t), some echo time t_end
 pub fn calc_b_factor(q_sq:&[f64], t:&[f64], t_end:f64, nuc:Nucleus) -> Option<f64> {
@@ -158,10 +150,10 @@ impl BMat {
 
 }
 
-/// calculates the b-matrix of some nucleus given Gx(t), Gy(t), Gz(t), and t_end. The order of the
+/// computes the b-matrix of some nucleus given Gx(t), Gy(t), Gz(t), and t_end. The order of the
 /// symmetric matrix elements are `[bxx,byy,bzz,bxy,bxz,byz]`. G(t) is assumes to have units T/m ,
 /// and time in seconds. The result is in standard s * mm^-2 units
-fn _calc_b_matrix(s:&Seq, t_inv:&[f64], t_end:f64, nuc:Nucleus) -> BMat {
+fn compute_b_matrix(s:&Seq, t_inv:&[f64], t_end:f64, nuc:Nucleus) -> BMat {
 
     let t = &s.time_sec;
     let gx = &s.gx_tpm;

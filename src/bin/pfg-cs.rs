@@ -2,11 +2,15 @@ use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use array_lib::ArrayDim;
+use array_lib::io_cfl::write_cfl;
+use array_lib::io_mrd::read_mrd;
 use clap::Parser;
 use headfile::Headfile;
 use mr_units::constants::Nucleus::Nuc1H;
 use mr_units::primitive::{Angle, FieldGrad, Freq, Length, Time};
 use mr_units::quantity::Unit;
+use num_complex::Complex32;
 use seq_struct::acq_event::ACQEvent;
 use seq_struct::grad_strength::EventControl;
 use seq_struct::gradient_event::GradEvent;
@@ -17,7 +21,7 @@ use seq_struct::variable::LUT;
 use serde::{Deserialize, Serialize};
 use seq_lib::defs::{RFPhase, GS, GW, RFP, SLICE, VIEW};
 use seq_lib::grad_pulses::{ramp_down, ramp_up, trapezoid};
-use seq_lib::{Args, PulseSequence, ToHeadfile, TOML};
+use seq_lib::{get_pe_table, Args, PulseSequence, ToHeadfile, TOML};
 use seq_lib::q_calc::{calc_b_matrix, grad_solve, load_bvecs};
 use seq_lib::rf_pulses::{hardpulse, hardpulse_composite};
 
@@ -94,6 +98,10 @@ struct PFGCS {
     bxz:Option<Vec<f64>>,
     /// calculate b-y-z cross term from b-matrix in seconds per square meter
     byz:Option<Vec<f64>>,
+    /// location of the max-energy (DC) sample for phase corrections
+    k0_pos:Option<Vec<[isize;3]>>,
+    /// norm-squared of the DC sample
+    k0_signal: Option<Vec<f32>>,
 }
 
 impl Default for PFGCS {
@@ -130,6 +138,8 @@ impl Default for PFGCS {
             bxy: None,
             bxz: None,
             byz: None,
+            k0_pos: None,
+            k0_signal: None,
         }
     }
 }
@@ -183,7 +193,13 @@ impl PFGCS {
         exp_loop.add_event(events.spoil).unwrap();
 
         // pre-calc time to calculate view-dependent parameters
-        exp_loop.set_pre_calc(Time::ms(4));
+        // we don't want to include any pre-calc time needed for real-world hardware when modeling
+        // for diffusion gradients
+        if self.solve_mode {
+            exp_loop.set_pre_calc(Time::ms(0));
+        }else {
+            exp_loop.set_pre_calc(Time::ms(4));
+        }
 
         // delay after rf pulses, before diffusion gradient start
         let post_rf_del = Time::us(50);
@@ -191,15 +207,6 @@ impl PFGCS {
         // place rf pulses relative to diffusion gradients
         exp_loop.set_min_time_span(Events::exc(), Events::diff1(), 100, 0, post_rf_del).unwrap();
         exp_loop.set_min_time_span(Events::refoc(), Events::diff2(), 100, 0, post_rf_del).unwrap();
-
-        // // set diffusion pulse separation (big delta)
-        // let big_delta = Time::ms(self.big_delta_ms);
-        // if let Ok(delta) = view_loop.set_min_time_span(Events::diff1(), Events::diff2(), 0, 0, big_delta) {
-        //     println!("set big delta to {} ms",delta.as_ms());
-        //     self.big_delta_ms = delta.as_ms();
-        // }else {
-        //     panic!("failed to set big delta ms");
-        // }
 
         // set delay between second diffusion pulse and phase encoding
         let post_diff2_del = Time::ms(self.post_diff2_delay_ms);
@@ -344,6 +351,11 @@ impl ToHeadfile for PFGCS {
         h.tr(tr_us as usize);
         h.n_volumes(n_bvecs);
         h.psd_name(SEQ_NAME);
+
+        let t = self.to_toml();
+        let param_tab = t.as_table().unwrap();
+        h.insert_toml_table(&param_tab, true);
+
         h
     }
 
@@ -412,8 +424,56 @@ impl PulseSequence for PFGCS {
         h
     }
 
-    fn finish_acquisition(&mut self, acq_dir: impl AsRef<Path>) {
-        todo!()
+    fn finish_acquisition(&mut self, acq_dir: impl AsRef<Path>, results_dir: impl AsRef<Path>) {
+
+        let raw_meta_file = acq_dir.as_ref().join(SEQ_NAME).with_extension("toml");
+        if !raw_meta_file.exists() {
+            panic!("No meta file found at {}", raw_meta_file.display());
+        }
+
+        let raw_file = acq_dir.as_ref().join(SEQ_NAME).with_extension("MRD");
+        if !raw_file.exists() {
+            panic!("raw data file {} doesn't exist", raw_file.display());
+        }
+
+        let (raw_data, raw_dims, ..) = read_mrd(&raw_file);
+        println!("raw data size: {}",raw_dims);
+        let raw_shape = raw_dims.shape_squeeze();
+
+        let n_bvecs = self.b_vecs.as_ref().expect("b-vectors are not in meta data").len();
+        let n_vols = raw_shape[2];
+        let n_views = raw_shape[1];
+        let n_read = raw_shape[0];
+        let mat_size = self.matrix_size;
+        let n_dig = n_bvecs.to_string().chars().count();
+
+        let pe_tab = get_pe_table(acq_dir, 3 * n_bvecs);
+
+        let vol_data_dims = ArrayDim::from_shape(&mat_size);
+
+        let mut max_energy = vec![0.0; n_bvecs];
+        let mut k0_coords = vec![[0,0,0]; n_bvecs];
+
+        raw_data.chunks_exact(n_read * n_views).enumerate().for_each(|(i,vol)| {
+            let mut vol_out = vol_data_dims.alloc(Complex32::ZERO);
+            vol.chunks_exact(n_read).zip(pe_tab.iter()).for_each(|(line,&[y,z])|{
+                // loop over k-space samples
+                line.iter().enumerate().for_each(|(x,sample)| {
+                    if sample.norm_sqr() > max_energy[i] {
+                        max_energy[i] = sample.norm_sqr();
+                        k0_coords[i] = [x as isize,y,z];
+                    }
+                    let addr = vol_data_dims.calc_addr_signed(&[x as isize,y,z]);
+                    vol_out[addr] = *sample;
+                })
+            });
+            println!("writing vol {}",i+1);
+            write_cfl(&results_dir.as_ref().join(format!("m{:0t$}",i,t=n_dig)),&vol_out,vol_data_dims);
+        });
+
+        self.k0_pos = Some(k0_coords);
+        self.k0_signal = Some(max_energy);
+
     }
 
     fn gop_mode(&mut self) {
