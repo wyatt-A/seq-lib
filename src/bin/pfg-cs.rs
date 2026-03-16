@@ -340,8 +340,8 @@ impl ToHeadfile for PFGCS {
         h.insert_list_1d("bmat_trace", bmat_trace, false);
 
         h.fov_x(self.fov_mm[0]);
-        h.fov_y(self.fov_mm[0]);
-        h.fov_z(self.fov_mm[0]);
+        h.fov_y(self.fov_mm[1]);
+        h.fov_z(self.fov_mm[2]);
         h.dim_x(self.matrix_size[0]);
         h.dim_y(self.matrix_size[1]);
         h.dim_z(self.matrix_size[1]);
