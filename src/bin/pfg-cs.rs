@@ -23,12 +23,15 @@ use seq_lib::rf_pulses::{hardpulse, hardpulse_composite};
 
 fn main() {
     let args = Args::parse();
-    args.run::<DTIVAR>();
+    args.run::<PFGCS>();
 }
 
-const SEQ_NAME: &str = "dti";
+/// pulsed field gradient method for diffusion encoding
+const SEQ_NAME: &str = "pfg_cs";
+
+/// pulsed field gradient method for diffusion encoding
 #[derive(Debug,Clone,Serialize,Deserialize)]
-struct DTIVAR {
+struct PFGCS {
     /// intended to compile the sequence with no phase encoding and user-adjustable diffusion gradients
     setup_mode: bool,
     /// compiles the sequence for use with display mode and with the MRS sequence simulator
@@ -93,9 +96,9 @@ struct DTIVAR {
     byz:Option<Vec<f64>>,
 }
 
-impl Default for DTIVAR {
+impl Default for PFGCS {
     fn default() -> Self {
-        DTIVAR {
+        PFGCS {
             setup_mode: false,
             sim_mode: false,
             solve_mode: false,
@@ -131,7 +134,7 @@ impl Default for DTIVAR {
     }
 }
 
-impl DTIVAR {
+impl PFGCS {
 
     /// reads the b-vec table, checks validity, and populates b_vec and shell_idx parameters
     fn read_bvecs(&mut self) {
@@ -308,7 +311,7 @@ impl DTIVAR {
 
 }
 
-impl ToHeadfile for DTIVAR {
+impl ToHeadfile for PFGCS {
     fn headfile(&self) -> Headfile {
 
 
@@ -349,9 +352,9 @@ impl ToHeadfile for DTIVAR {
     }
 }
 
-impl TOML for DTIVAR {}
+impl TOML for PFGCS {}
 
-impl PulseSequence for DTIVAR {
+impl PulseSequence for PFGCS {
     fn build_sequence(&mut self) -> SeqLoop {
 
         // load the b-vector table
@@ -447,7 +450,7 @@ struct EventControllers {
 }
 
 impl EventControllers {
-    fn build(dti:&mut DTIVAR) -> EventControllers {
+    fn build(dti:&mut PFGCS) -> EventControllers {
 
         let exc_pow = EventControl::<f64>::new().with_adj(Self::exp_pow()).to_shared();
         let ref_pow = EventControl::<f64>::new().with_adj(Self::ref_pow()).to_shared();
@@ -609,7 +612,7 @@ struct Events {
 
 impl Events {
 
-    fn build(dti:&mut DTIVAR) -> Events {
+    fn build(dti:&mut PFGCS) -> Events {
         let w = Waveforms::build(dti);
         let ec = EventControllers::build(dti);
         let exc = RfEvent::new(Self::exc(),&w.exc,&ec.exc_pow);
@@ -682,7 +685,7 @@ struct Waveforms {
 }
 
 impl Waveforms {
-    fn build(dti:&DTIVAR) -> Waveforms {
+    fn build(dti:&PFGCS) -> Waveforms {
 
         let dt = Time::us(2);
 
