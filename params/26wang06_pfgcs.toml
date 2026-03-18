@@ -20,8 +20,8 @@ little_delta_ms = 2.5
 rep_time_ms = 100.0
 g_limit_tpm = 2.2
 post_diff2_delay_ms = 0.2
-cs_table = "/Users/Wyatt/scratch/260316_00/stream_CS256_8x_pa18_pb54"
-bvec_table = "/Users/Wyatt/scratch/260316_00/6_shell_144_6b0.txt"
+cs_table = "C:/workstation/data/petableCS_stream/stream_CS256_8x_pa18_pb54"
+bvec_table = "C:/workstation/data/diffusion_table/26.wang.06/6_shell_144_6b0.txt"
 target_bvalues = [
     0.0,
     1000,

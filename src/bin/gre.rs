@@ -256,8 +256,8 @@ impl PulseSequence for Gre {
         s
     }
 
-    fn finish_acquisition(&mut self, acq_dir: impl AsRef<Path>) {
-        finish_acq(self,acq_dir);
+    fn finish_acquisition(&mut self, acq_dir: impl AsRef<Path>, results_dir: impl AsRef<Path>) {
+        finish_acq(self,acq_dir, results_dir);
     }
 
     fn gop_mode(&mut self) {
@@ -555,7 +555,7 @@ impl Events {
 }
 
 /// format and analyze k-space data for recon. This fills in extra parameters
-fn finish_acq(gre:&mut Gre, acq_dir:impl AsRef<Path>) {
+fn finish_acq(gre:&mut Gre, acq_dir:impl AsRef<Path>, results_dir: impl AsRef<Path>) {
 
 
     // size of gridded data set

@@ -436,8 +436,10 @@ impl PulseSequence for PFGCS {
             panic!("raw data file {} doesn't exist", raw_file.display());
         }
 
+        println!("loading raw data");
         let (raw_data, raw_dims, ..) = read_mrd(&raw_file);
         println!("raw data size: {}",raw_dims);
+
         let raw_shape = raw_dims.shape_squeeze();
 
         let n_bvecs = self.b_vecs.as_ref().expect("b-vectors are not in meta data").len();
